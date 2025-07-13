@@ -28,6 +28,7 @@ async function run() {
     const db = client.db("adopty");
     const usersCollection = db.collection("users");
     const petsCollection = db.collection("pets");
+    const donationCamCollection = db.collection("donation-cam");
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -67,6 +68,19 @@ async function run() {
       console.log(result);
       res.send(result);
     });
+
+
+
+     app.get("/donation-cam", async (req, res) => {
+      const result = await donationCamCollection.find().toArray();
+      console.log(result);
+      res.send(result);
+    });
+
+
+
+
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
