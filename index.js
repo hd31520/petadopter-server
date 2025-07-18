@@ -103,11 +103,9 @@ async function run() {
     const verifyFBToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res
-          .status(401)
-          .send({
-            message: "Unauthorized: No token provided or invalid format",
-          });
+        return res.status(401).send({
+          message: "Unauthorized: No token provided or invalid format",
+        });
       }
       const token = authHeader.split(" ")[1];
 
@@ -245,12 +243,10 @@ async function run() {
       const authenticatedUserId = req.decoded.uid; // Get UID from verified Firebase token
 
       if (!amount || amount <= 0 || !campaignId || !authenticatedUserId) {
-        return res
-          .status(400)
-          .send({
-            message:
-              "Amount, campaign ID, and authenticated user ID are required.",
-          });
+        return res.status(400).send({
+          message:
+            "Amount, campaign ID, and authenticated user ID are required.",
+        });
       }
 
       try {
@@ -282,12 +278,9 @@ async function run() {
       const authenticatedDonorEmail = req.decoded.email;
 
       if (!campaignId || !amount || !authenticatedDonorId || !paymentIntentId) {
-        return res
-          .status(400)
-          .send({
-            message:
-              "Missing required donation details for authenticated user.",
-          });
+        return res.status(400).send({
+          message: "Missing required donation details for authenticated user.",
+        });
       }
 
       try {
@@ -299,12 +292,10 @@ async function run() {
         );
 
         if (updateResult.matchedCount === 0) {
-          return res
-            .status(404)
-            .send({
-              success: false,
-              message: "Donation campaign not found for update.",
-            });
+          return res.status(404).send({
+            success: false,
+            message: "Donation campaign not found for update.",
+          });
         }
 
         const donationRecord = {
@@ -321,12 +312,10 @@ async function run() {
         res.send({ success: true, message: "Donation recorded successfully!" });
       } catch (error) {
         console.error("Error recording donation:", error);
-        res
-          .status(500)
-          .send({
-            success: false,
-            message: "Internal server error during donation recording.",
-          });
+        res.status(500).send({
+          success: false,
+          message: "Internal server error during donation recording.",
+        });
       }
     });
 
@@ -372,13 +361,11 @@ async function run() {
         };
 
         const result = await donationCamCollection.insertOne(campaignToInsert);
-        res
-          .status(201)
-          .send({
-            success: true,
-            message: "Campaign created successfully!",
-            insertedId: result.insertedId,
-          });
+        res.status(201).send({
+          success: true,
+          message: "Campaign created successfully!",
+          insertedId: result.insertedId,
+        });
       } catch (error) {
         console.error("Error creating new donation campaign:", error);
         res
@@ -387,20 +374,349 @@ async function run() {
       }
     });
 
+    // User
+
+    // NEW: Add a Pet (Protected)
+    app.post("/pets", verifyFBToken, async (req, res) => {
+      const newPet = req.body;
+      const creatorId = req.decoded.uid; // Get creator's UID from verified token
+
+      // Basic validation (add more as needed)
+      if (
+        !newPet.petName ||
+        !newPet.petImage ||
+        !newPet.petCategory ||
+        !newPet.petLocation ||
+        !creatorId
+      ) {
+        return res
+          .status(400)
+          .send({
+            message:
+              "Missing required pet fields (name, image, category, location, creator).",
+          });
+      }
+      if (typeof newPet.petAge !== "number" || newPet.petAge < 0) {
+        return res
+          .status(400)
+          .send({ message: "Pet age must be a non-negative number." });
+      }
+
+      try {
+        const petToInsert = {
+          ...newPet,
+          createdByUserId: creatorId, // Store the Firebase UID of the creator
+          createdAt: new Date(), // Store creation date as a Date object
+          adopted: false, // Default status
+        };
+
+        const result = await petsCollection.insertOne(petToInsert);
+        res
+          .status(201)
+          .send({
+            success: true,
+            message: "Pet added successfully!",
+            insertedId: result.insertedId,
+          });
+      } catch (error) {
+        console.error("Error adding new pet:", error);
+        res.status(500).send({ message: "Failed to add pet." });
+      }
+    });
 
 
 
 
+    // NEW: Get Pets added by a specific user (Protected)
+app.get("/user-pets/:userId", verifyFBToken, async (req, res) => {
+  const requestedUserId = req.params.userId;
+  const authUserId = req.decoded.uid; // User ID from the authenticated token
 
+  // Ensure the requested user ID matches the authenticated user's ID
+  // Or, if an admin is requesting, allow it (add verifyAdmin if needed for admin access)
+  if (requestedUserId !== authUserId) {
+    return res.status(403).send({ message: "Forbidden: You can only view your own added pets." });
+  }
 
+  try {
+    const pets = await petsCollection.find({ createdByUserId: requestedUserId }).toArray();
+    res.send(pets);
+  } catch (error) {
+    console.error("Error fetching user's pets:", error);
+    res.status(500).send({ message: "Failed to retrieve pets." });
+  }
+});
 
+// NEW: Delete a Pet (Protected - only by creator or admin)
+app.delete("/pets/:id", verifyFBToken, async (req, res) => {
+  const petId = req.params.id;
+  const authUserId = req.decoded.uid; // User ID from the authenticated token
+  const userRole = req.decoded.role; // Role from the authenticated token (if available)
 
+  if (!ObjectId.isValid(petId)) {
+    return res.status(400).send({ message: "Invalid pet ID format." });
+  }
 
+  try {
+    const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
 
+    if (!pet) {
+      return res.status(404).send({ message: "Pet not found." });
+    }
 
+    // Check if the user is the creator of the pet OR if the user is an admin
+    if (pet.createdByUserId !== authUserId && userRole !== 'admin') {
+      return res.status(403).send({ message: "Forbidden: You do not have permission to delete this pet." });
+    }
 
+    const result = await petsCollection.deleteOne({ _id: new ObjectId(petId) });
+    if (result.deletedCount === 1) {
+      res.send({ success: true, message: "Pet deleted successfully." });
+    } else {
+      res.status(404).send({ message: "Pet not found or already deleted." });
+    }
+  } catch (error) {
+    console.error("Error deleting pet:", error);
+    res.status(500).send({ message: "Failed to delete pet." });
+  }
+});
 
-    
+// NEW: Update Pet Adoption Status (Protected - only by creator or admin)
+app.patch("/pets/status/:id", verifyFBToken, async (req, res) => {
+  const petId = req.params.id;
+  const { adopted } = req.body; // Expecting { adopted: true/false }
+  const authUserId = req.decoded.uid;
+  const userRole = req.decoded.role;
+
+  if (!ObjectId.isValid(petId)) {
+    return res.status(400).send({ message: "Invalid pet ID format." });
+  }
+  if (typeof adopted !== 'boolean') {
+    return res.status(400).send({ message: "Invalid 'adopted' status. Must be true or false." });
+  }
+
+  try {
+    const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
+
+    if (!pet) {
+      return res.status(404).send({ message: "Pet not found." });
+    }
+
+    // Check if the user is the creator of the pet OR if the user is an admin
+    if (pet.createdByUserId !== authUserId && userRole !== 'admin') {
+      return res.status(403).send({ message: "Forbidden: You do not have permission to update this pet status." });
+    }
+
+    const result = await petsCollection.updateOne(
+      { _id: new ObjectId(petId) },
+      { $set: { adopted: adopted } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ message: "Pet not found or status already updated." });
+    }
+    res.send({ success: true, message: `Pet adoption status updated to ${adopted}.` });
+  } catch (error) {
+    console.error("Error updating pet status:", error);
+    res.status(500).send({ message: "Failed to update pet status." });
+  }
+});
+
+    // Admin
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email: email };
+      try {
+        const user = await usersCollection.findOne(query);
+        if (!user || user.role !== "admin") {
+          return res
+            .status(403)
+            .send({ message: "Forbidden: Admin access required" });
+        }
+        next();
+      } catch (error) {
+        console.error("Error verifying admin role:", error);
+        res
+          .status(500)
+          .send({
+            message: "Internal server error during admin verification.",
+          });
+      }
+    };
+
+    // NEW: Verify Volunteer Middleware
+    const verifyVolunteer = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email: email };
+      try {
+        const user = await usersCollection.findOne(query);
+        // Allow both 'admin' and 'volunteer' roles to pass this middleware
+        if (!user || (user.role !== "volunteer" && user.role !== "admin")) {
+          return res
+            .status(403)
+            .send({ message: "Forbidden: Volunteer or Admin access required" });
+        }
+        next();
+      } catch (error) {
+        console.error("Error verifying volunteer role:", error);
+        res
+          .status(500)
+          .send({
+            message: "Internal server error during volunteer verification.",
+          });
+      }
+    };
+
+    // --- Define API Routes ---
+
+    // User routes (MODIFIED: Default role for new users)
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      const email = user.email;
+
+      if (!email) {
+        return res.status(400).send({ message: "Email is required" });
+      }
+
+      const userExists = await usersCollection.findOne({ email });
+
+      if (userExists) {
+        await usersCollection.updateOne(
+          { email },
+          { $set: { last_log_in: user.last_log_in } }
+        );
+        return res.status(200).send({
+          message: "User already exists. last_log_in updated.",
+          inserted: false,
+          user: userExists, // Send existing user data
+        });
+      }
+
+      // For new users, default role to 'user'
+      const newUser = { ...user, role: "user" }; // Default role for new users
+      const result = await usersCollection.insertOne(newUser);
+      res.status(201).send({ ...result, user: newUser }); // Send back new user data
+    });
+
+    // Get User by Email (for fetching role) - Protected by verifyFBToken
+    app.get("/users/:email", verifyFBToken, async (req, res) => {
+      const requestedEmail = req.params.email;
+      // Ensure the requested email matches the authenticated user's email
+      if (req.decoded.email !== requestedEmail) {
+        return res
+          .status(403)
+          .send({
+            message: "Forbidden: You can only view your own user data.",
+          });
+      }
+      try {
+        const user = await usersCollection.findOne({ email: requestedEmail });
+        if (user) {
+          res.send(user); // Send back the user object including their role
+        } else {
+          res.status(404).send({ message: "User not found." });
+        }
+      } catch (error) {
+        console.error("Error fetching user by email:", error);
+        res.status(500).send({ message: "Internal server error." });
+      }
+    });
+
+    // ... (existing public routes)
+
+    // ... (existing secure routes)
+
+    // ADMIN-ONLY ROUTES (Protected by verifyFBToken AND verifyAdmin)
+    app.get("/admin/users", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const users = await usersCollection.find({}).toArray();
+        res.send(users);
+      } catch (error) {
+        console.error("Error fetching all users (admin):", error);
+        res.status(500).send({ message: "Internal server error." });
+      }
+    });
+
+    app.get("/admin/pets", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const pets = await petsCollection.find({}).toArray();
+        res.send(pets);
+      } catch (error) {
+        console.error("Error fetching all pets (admin):", error);
+        res.status(500).send({ message: "Internal server error." });
+      }
+    });
+
+    app.get(
+      "/admin/donation-campaigns",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const campaigns = await donationCamCollection.find({}).toArray();
+          res.send(campaigns);
+        } catch (error) {
+          console.error(
+            "Error fetching all donation campaigns (admin):",
+            error
+          );
+          res.status(500).send({ message: "Internal server error." });
+        }
+      }
+    );
+
+    app.get(
+      "/admin/donations",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const donations = await donationsCollection.find({}).toArray();
+          res.send(donations);
+        } catch (error) {
+          console.error("Error fetching all donations (admin):", error);
+          res.status(500).send({ message: "Internal server error." });
+        }
+      }
+    );
+
+    // NEW ADMIN ROUTE: Update User Role
+    app.patch(
+      "/admin/users/role/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const userId = req.params.id;
+        const { role } = req.body; // Expected role: 'user', 'admin', or 'volunteer'
+
+        if (!role || !["user", "admin", "volunteer"].includes(role)) {
+          return res
+            .status(400)
+            .send({
+              message:
+                "Invalid role provided. Must be 'user', 'admin', or 'volunteer'.",
+            });
+        }
+        if (!ObjectId.isValid(userId)) {
+          return res.status(400).send({ message: "Invalid user ID format." });
+        }
+
+        try {
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { role: role } }
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).send({ message: "User not found." });
+          }
+          res.send({ success: true, message: `User role updated to ${role}.` });
+        } catch (error) {
+          console.error("Error updating user role:", error);
+          res.status(500).send({ message: "Internal server error." });
+        }
+      }
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
