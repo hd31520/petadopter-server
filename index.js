@@ -47,7 +47,7 @@ let petsCollection;
 let donationCamCollection; // Collection for donation campaigns
 let donationsCollection; // Collection for individual donation records
 let wantedPetsCollection; // Collection for wanted pet requests
-let adoptionRequestsCollection; 
+let adoptionRequestsCollection;
 
 // Stripe Secret Key from .env
 // IMPORTANT: Ensure process.env.STRIPE_SECRET_KEY is correctly set in your .env
@@ -86,7 +86,7 @@ async function run() {
     donationCamCollection = db.collection("donation-cam"); // Using 'donation-cam' as per your provided code
     donationsCollection = db.collection("donations"); // New collection for individual donations
     wantedPetsCollection = db.collection("wantedPets");
-    adoptionRequestsCollection = db.collection("adoptionRequests")
+    adoptionRequestsCollection = db.collection("adoptionRequests");
     // Initialize wantedPets collection
 
     // Optional: Log collection counts to confirm data presence
@@ -392,12 +392,10 @@ async function run() {
         !newPet.petLocation ||
         !creatorId
       ) {
-        return res
-          .status(400)
-          .send({
-            message:
-              "Missing required pet fields (name, image, category, location, creator).",
-          });
+        return res.status(400).send({
+          message:
+            "Missing required pet fields (name, image, category, location, creator).",
+        });
       }
       if (typeof newPet.petAge !== "number" || newPet.petAge < 0) {
         return res
@@ -414,116 +412,140 @@ async function run() {
         };
 
         const result = await petsCollection.insertOne(petToInsert);
-        res
-          .status(201)
-          .send({
-            success: true,
-            message: "Pet added successfully!",
-            insertedId: result.insertedId,
-          });
+        res.status(201).send({
+          success: true,
+          message: "Pet added successfully!",
+          insertedId: result.insertedId,
+        });
       } catch (error) {
         console.error("Error adding new pet:", error);
         res.status(500).send({ message: "Failed to add pet." });
       }
     });
 
-
-
-
     // NEW: Get Pets added by a specific user (Protected)
-app.get("/user-pets/:userId", verifyFBToken, async (req, res) => {
-  const requestedUserId = req.params.userId;
-  const authUserId = req.decoded.uid; // User ID from the authenticated token
+    app.get("/user-pets/:userId", verifyFBToken, async (req, res) => {
+      const requestedUserId = req.params.userId;
+      const authUserId = req.decoded.uid; // User ID from the authenticated token
 
-  // Ensure the requested user ID matches the authenticated user's ID
-  // Or, if an admin is requesting, allow it (add verifyAdmin if needed for admin access)
-  if (requestedUserId !== authUserId) {
-    return res.status(403).send({ message: "Forbidden: You can only view your own added pets." });
-  }
+      // Ensure the requested user ID matches the authenticated user's ID
+      // Or, if an admin is requesting, allow it (add verifyAdmin if needed for admin access)
+      if (requestedUserId !== authUserId) {
+        return res
+          .status(403)
+          .send({
+            message: "Forbidden: You can only view your own added pets.",
+          });
+      }
 
-  try {
-    const pets = await petsCollection.find({ createdByUserId: requestedUserId }).toArray();
-    res.send(pets);
-  } catch (error) {
-    console.error("Error fetching user's pets:", error);
-    res.status(500).send({ message: "Failed to retrieve pets." });
-  }
-});
+      try {
+        const pets = await petsCollection
+          .find({ createdByUserId: requestedUserId })
+          .toArray();
+        res.send(pets);
+      } catch (error) {
+        console.error("Error fetching user's pets:", error);
+        res.status(500).send({ message: "Failed to retrieve pets." });
+      }
+    });
 
-// NEW: Delete a Pet (Protected - only by creator or admin)
-app.delete("/pets/:id", verifyFBToken, async (req, res) => {
-  const petId = req.params.id;
-  const authUserId = req.decoded.uid; // User ID from the authenticated token
-  const userRole = req.decoded.role; // Role from the authenticated token (if available)
+    // NEW: Delete a Pet (Protected - only by creator or admin)
+    app.delete("/pets/:id", verifyFBToken, async (req, res) => {
+      const petId = req.params.id;
+      const authUserId = req.decoded.uid; // User ID from the authenticated token
+      const userRole = req.decoded.role; // Role from the authenticated token (if available)
 
-  if (!ObjectId.isValid(petId)) {
-    return res.status(400).send({ message: "Invalid pet ID format." });
-  }
+      if (!ObjectId.isValid(petId)) {
+        return res.status(400).send({ message: "Invalid pet ID format." });
+      }
 
-  try {
-    const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
+      try {
+        const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
 
-    if (!pet) {
-      return res.status(404).send({ message: "Pet not found." });
-    }
+        if (!pet) {
+          return res.status(404).send({ message: "Pet not found." });
+        }
 
-    // Check if the user is the creator of the pet OR if the user is an admin
-    if (pet.createdByUserId !== authUserId && userRole !== 'admin') {
-      return res.status(403).send({ message: "Forbidden: You do not have permission to delete this pet." });
-    }
+        // Check if the user is the creator of the pet OR if the user is an admin
+        if (pet.createdByUserId !== authUserId && userRole !== "admin") {
+          return res
+            .status(403)
+            .send({
+              message:
+                "Forbidden: You do not have permission to delete this pet.",
+            });
+        }
 
-    const result = await petsCollection.deleteOne({ _id: new ObjectId(petId) });
-    if (result.deletedCount === 1) {
-      res.send({ success: true, message: "Pet deleted successfully." });
-    } else {
-      res.status(404).send({ message: "Pet not found or already deleted." });
-    }
-  } catch (error) {
-    console.error("Error deleting pet:", error);
-    res.status(500).send({ message: "Failed to delete pet." });
-  }
-});
+        const result = await petsCollection.deleteOne({
+          _id: new ObjectId(petId),
+        });
+        if (result.deletedCount === 1) {
+          res.send({ success: true, message: "Pet deleted successfully." });
+        } else {
+          res
+            .status(404)
+            .send({ message: "Pet not found or already deleted." });
+        }
+      } catch (error) {
+        console.error("Error deleting pet:", error);
+        res.status(500).send({ message: "Failed to delete pet." });
+      }
+    });
 
-// NEW: Update Pet Adoption Status (Protected - only by creator or admin)
-app.patch("/pets/status/:id", verifyFBToken, async (req, res) => {
-  const petId = req.params.id;
-  const { adopted } = req.body; // Expecting { adopted: true/false }
-  const authUserId = req.decoded.uid;
-  const userRole = req.decoded.role;
+    // NEW: Update Pet Adoption Status (Protected - only by creator or admin)
+    app.patch("/pets/status/:id", verifyFBToken, async (req, res) => {
+      const petId = req.params.id;
+      const { adopted } = req.body; // Expecting { adopted: true/false }
+      const authUserId = req.decoded.uid;
+      const userRole = req.decoded.role;
 
-  if (!ObjectId.isValid(petId)) {
-    return res.status(400).send({ message: "Invalid pet ID format." });
-  }
-  if (typeof adopted !== 'boolean') {
-    return res.status(400).send({ message: "Invalid 'adopted' status. Must be true or false." });
-  }
+      if (!ObjectId.isValid(petId)) {
+        return res.status(400).send({ message: "Invalid pet ID format." });
+      }
+      if (typeof adopted !== "boolean") {
+        return res
+          .status(400)
+          .send({
+            message: "Invalid 'adopted' status. Must be true or false.",
+          });
+      }
 
-  try {
-    const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
+      try {
+        const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
 
-    if (!pet) {
-      return res.status(404).send({ message: "Pet not found." });
-    }
+        if (!pet) {
+          return res.status(404).send({ message: "Pet not found." });
+        }
 
-    // Check if the user is the creator of the pet OR if the user is an admin
-    if (pet.createdByUserId !== authUserId && userRole !== 'admin') {
-      return res.status(403).send({ message: "Forbidden: You do not have permission to update this pet status." });
-    }
+        // Check if the user is the creator of the pet OR if the user is an admin
+        if (pet.createdByUserId !== authUserId && userRole !== "admin") {
+          return res
+            .status(403)
+            .send({
+              message:
+                "Forbidden: You do not have permission to update this pet status.",
+            });
+        }
 
-    const result = await petsCollection.updateOne(
-      { _id: new ObjectId(petId) },
-      { $set: { adopted: adopted } }
-    );
+        const result = await petsCollection.updateOne(
+          { _id: new ObjectId(petId) },
+          { $set: { adopted: adopted } }
+        );
 
-    if (result.matchedCount === 0) {
-      return res.status(404).send({ message: "Pet not found or status already updated." });
-    }
-    res.send({ success: true, message: `Pet adoption status updated to ${adopted}.` });
-  } catch (error) {
-    console.error("Error updating pet status:", error);
-    res.status(500).send({ message: "Failed to update pet status." });
-  }
-});
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .send({ message: "Pet not found or status already updated." });
+        }
+        res.send({
+          success: true,
+          message: `Pet adoption status updated to ${adopted}.`,
+        });
+      } catch (error) {
+        console.error("Error updating pet status:", error);
+        res.status(500).send({ message: "Failed to update pet status." });
+      }
+    });
 
     // Admin
     const verifyAdmin = async (req, res, next) => {
@@ -539,11 +561,9 @@ app.patch("/pets/status/:id", verifyFBToken, async (req, res) => {
         next();
       } catch (error) {
         console.error("Error verifying admin role:", error);
-        res
-          .status(500)
-          .send({
-            message: "Internal server error during admin verification.",
-          });
+        res.status(500).send({
+          message: "Internal server error during admin verification.",
+        });
       }
     };
 
@@ -562,11 +582,9 @@ app.patch("/pets/status/:id", verifyFBToken, async (req, res) => {
         next();
       } catch (error) {
         console.error("Error verifying volunteer role:", error);
-        res
-          .status(500)
-          .send({
-            message: "Internal server error during volunteer verification.",
-          });
+        res.status(500).send({
+          message: "Internal server error during volunteer verification.",
+        });
       }
     };
 
@@ -606,11 +624,9 @@ app.patch("/pets/status/:id", verifyFBToken, async (req, res) => {
       const requestedEmail = req.params.email;
       // Ensure the requested email matches the authenticated user's email
       if (req.decoded.email !== requestedEmail) {
-        return res
-          .status(403)
-          .send({
-            message: "Forbidden: You can only view your own user data.",
-          });
+        return res.status(403).send({
+          message: "Forbidden: You can only view your own user data.",
+        });
       }
       try {
         const user = await usersCollection.findOne({ email: requestedEmail });
@@ -693,12 +709,10 @@ app.patch("/pets/status/:id", verifyFBToken, async (req, res) => {
         const { role } = req.body; // Expected role: 'user', 'admin', or 'volunteer'
 
         if (!role || !["user", "admin", "volunteer"].includes(role)) {
-          return res
-            .status(400)
-            .send({
-              message:
-                "Invalid role provided. Must be 'user', 'admin', or 'volunteer'.",
-            });
+          return res.status(400).send({
+            message:
+              "Invalid role provided. Must be 'user', 'admin', or 'volunteer'.",
+          });
         }
         if (!ObjectId.isValid(userId)) {
           return res.status(400).send({ message: "Invalid user ID format." });
