@@ -123,20 +123,26 @@ async function run() {
     const attachUserRole = async (req, res, next) => {
       if (!req.decoded || !req.decoded.email) {
         // If verifyFBToken didn't run or failed, or email is missing
-        return res.status(401).send({ message: "Unauthorized: User email not found." });
+        return res
+          .status(401)
+          .send({ message: "Unauthorized: User email not found." });
       }
       try {
-        const user = await usersCollection.findOne({ email: req.decoded.email });
+        const user = await usersCollection.findOne({
+          email: req.decoded.email,
+        });
         if (user) {
           req.decoded.role = user.role; // Attach role to the decoded token payload
         } else {
           // If user not found in DB, assign a default role or deny access
-          req.decoded.role = 'unknown'; // Or handle as per your app logic
+          req.decoded.role = "unknown"; // Or handle as per your app logic
         }
         next();
       } catch (error) {
         console.error("Error attaching user role:", error);
-        res.status(500).send({ message: "Internal server error during role attachment." });
+        res
+          .status(500)
+          .send({ message: "Internal server error during role attachment." });
       }
     };
 
@@ -152,14 +158,16 @@ async function run() {
 
     // Volunteer Middleware (Requires verifyFBToken and attachUserRole before it)
     const verifyVolunteer = (req, res, next) => {
-      if (!req.decoded || (req.decoded.role !== "volunteer" && req.decoded.role !== "admin")) {
+      if (
+        !req.decoded ||
+        (req.decoded.role !== "volunteer" && req.decoded.role !== "admin")
+      ) {
         return res
           .status(403)
           .send({ message: "Forbidden: Volunteer or Admin access required" });
       }
       next();
     };
-
 
     // --- Define API Routes ---
 
@@ -214,87 +222,117 @@ async function run() {
     });
 
     // Get All Users (Admin only)
-    app.get("/users", verifyFBToken, attachUserRole, verifyAdmin, async (req, res) => {
-      try {
-        const users = await usersCollection.find().toArray();
-        res.send(users);
-      } catch (error) {
-        console.error("Error fetching all users:", error);
-        res.status(500).send({ message: "Failed to retrieve users." });
+    app.get(
+      "/users",
+      verifyFBToken,
+      attachUserRole,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const users = await usersCollection.find().toArray();
+          res.send(users);
+        } catch (error) {
+          console.error("Error fetching all users:", error);
+          res.status(500).send({ message: "Failed to retrieve users." });
+        }
       }
-    });
+    );
 
     // Get User by Email (for fetching role) - Protected by verifyFBToken
-    app.get("/users/:email", verifyFBToken, attachUserRole, async (req, res) => {
-      const requestedEmail = req.params.email;
-      // Ensure the requested email matches the authenticated user's email or if user is admin
-      if (req.decoded.email !== requestedEmail && req.decoded.role !== 'admin') {
-        return res.status(403).send({
-          message: "Forbidden: You can only view your own user data unless you are an admin.",
-        });
-      }
-      try {
-        const user = await usersCollection.findOne({ email: requestedEmail });
-        if (user) {
-          res.send(user); // Send back the user object including their role
-        } else {
-          res.status(404).send({ message: "User not found." });
+    app.get(
+      "/users/:email",
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const requestedEmail = req.params.email;
+        // Ensure the requested email matches the authenticated user's email or if user is admin
+        if (
+          req.decoded.email !== requestedEmail &&
+          req.decoded.role !== "admin"
+        ) {
+          return res.status(403).send({
+            message:
+              "Forbidden: You can only view your own user data unless you are an admin.",
+          });
         }
-      } catch (error) {
-        console.error("Error fetching user:", error);
-        res.status(500).send({ message: "Failed to retrieve user." });
+        try {
+          const user = await usersCollection.findOne({ email: requestedEmail });
+          if (user) {
+            res.send(user); // Send back the user object including their role
+          } else {
+            res.status(404).send({ message: "User not found." });
+          }
+        } catch (error) {
+          console.error("Error fetching user:", error);
+          res.status(500).send({ message: "Failed to retrieve user." });
+        }
       }
-    });
+    );
 
     // Update User Role (Admin only)
-    app.patch("/users/role/:id", verifyFBToken, attachUserRole, verifyAdmin, async (req, res) => {
-      const userId = req.params.id;
-      const { role } = req.body; // Expecting { role: "admin" | "volunteer" | "user" }
+    app.patch(
+      "/users/role/:id",
+      verifyFBToken,
+      attachUserRole,
+      verifyAdmin,
+      async (req, res) => {
+        const userId = req.params.id;
+        const { role } = req.body; // Expecting { role: "admin" | "volunteer" | "user" }
 
-      if (!ObjectId.isValid(userId)) {
-        return res.status(400).send({ message: "Invalid user ID format." });
-      }
-      if (!["admin", "volunteer", "user"].includes(role)) {
-        return res.status(400).send({ message: "Invalid role specified." });
-      }
-
-      try {
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(userId) },
-          { $set: { role: role } }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).send({ message: "User not found." });
+        if (!ObjectId.isValid(userId)) {
+          return res.status(400).send({ message: "Invalid user ID format." });
         }
-        res.send({ success: true, message: `User role updated to ${role}.` });
-      } catch (error) {
-        console.error("Error updating user role:", error);
-        res.status(500).send({ message: "Failed to update user role." });
+        if (!["admin", "volunteer", "user"].includes(role)) {
+          return res.status(400).send({ message: "Invalid role specified." });
+        }
+
+        try {
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { role: role } }
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).send({ message: "User not found." });
+          }
+          res.send({ success: true, message: `User role updated to ${role}.` });
+        } catch (error) {
+          console.error("Error updating user role:", error);
+          res.status(500).send({ message: "Failed to update user role." });
+        }
       }
-    });
+    );
 
     // Delete User (Admin only)
-    app.delete("/users/:id", verifyFBToken, attachUserRole, verifyAdmin, async (req, res) => {
-      const userId = req.params.id;
+    app.delete(
+      "/users/:id",
+      verifyFBToken,
+      attachUserRole,
+      verifyAdmin,
+      async (req, res) => {
+        const userId = req.params.id;
 
-      if (!ObjectId.isValid(userId)) {
-        return res.status(400).send({ message: "Invalid user ID format." });
-      }
-
-      try {
-        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
-        if (result.deletedCount === 1) {
-          res.send({ success: true, message: "User deleted successfully." });
-        } else {
-          res.status(404).send({ message: "User not found or already deleted." });
+        if (!ObjectId.isValid(userId)) {
+          return res.status(400).send({ message: "Invalid user ID format." });
         }
-      } catch (error) {
-        console.error("Error deleting user:", error);
-        res.status(500).send({ message: "Failed to delete user." });
-      }
-    });
 
+        try {
+          const result = await usersCollection.deleteOne({
+            _id: new ObjectId(userId),
+          });
+          if (result.deletedCount === 1) {
+            res.send({ success: true, message: "User deleted successfully." });
+          } else {
+            res
+              .status(404)
+              .send({ message: "User not found or already deleted." });
+          }
+        } catch (error) {
+          console.error("Error deleting user:", error);
+          res.status(500).send({ message: "Failed to delete user." });
+        }
+      }
+    );
 
     // Pet data routes (Public)
     app.get("/pets", async (req, res) => {
@@ -373,28 +411,34 @@ async function run() {
     });
 
     // Get Pets added by a specific user (Protected - user can only view their own, admin can view all)
-    app.get("/user-pets/:userId", verifyFBToken, attachUserRole, async (req, res) => {
-      const requestedUserId = req.params.userId;
-      const authUserId = req.decoded.uid; // User ID from the authenticated token
-      const userRole = req.decoded.role;
+    app.get(
+      "/user-pets/:userId",
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const requestedUserId = req.params.userId;
+        const authUserId = req.decoded.uid; // User ID from the authenticated token
+        const userRole = req.decoded.role;
 
-      // Allow if the requested ID matches the authenticated user's ID OR if the user is an admin
-      if (requestedUserId !== authUserId && userRole !== 'admin') {
-        return res.status(403).send({
-          message: "Forbidden: You can only view your own added pets unless you are an admin.",
-        });
-      }
+        // Allow if the requested ID matches the authenticated user's ID OR if the user is an admin
+        if (requestedUserId !== authUserId && userRole !== "admin") {
+          return res.status(403).send({
+            message:
+              "Forbidden: You can only view your own added pets unless you are an admin.",
+          });
+        }
 
-      try {
-        const pets = await petsCollection
-          .find({ createdByUserId: requestedUserId })
-          .toArray();
-        res.send(pets);
-      } catch (error) {
-        console.error("Error fetching user's pets:", error);
-        res.status(500).send({ message: "Failed to retrieve pets." });
+        try {
+          const pets = await petsCollection
+            .find({ createdByUserId: requestedUserId })
+            .toArray();
+          res.send(pets);
+        } catch (error) {
+          console.error("Error fetching user's pets:", error);
+          res.status(500).send({ message: "Failed to retrieve pets." });
+        }
       }
-    });
+    );
 
     // Delete a Pet (Protected - only by creator or admin)
     app.delete("/pets/:id", verifyFBToken, attachUserRole, async (req, res) => {
@@ -438,59 +482,70 @@ async function run() {
     });
 
     // Update Pet Adoption Status (Protected - only by creator or admin)
-    app.patch("/pets/status/:id", verifyFBToken, attachUserRole, async (req, res) => {
-      const petId = req.params.id;
-      const { adopted } = req.body; // Expecting { adopted: true/false }
-      const authUserId = req.decoded.uid;
-      const userRole = req.decoded.role;
+    app.patch(
+      "/pets/status/:id",
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const petId = req.params.id;
+        const { adopted } = req.body; // Expecting { adopted: true/false }
+        const authUserId = req.decoded.uid;
+        const userRole = req.decoded.role;
 
-      if (!ObjectId.isValid(petId)) {
-        return res.status(400).send({ message: "Invalid pet ID format." });
-      }
-      if (typeof adopted !== "boolean") {
-        return res.status(400).send({
-          message: "Invalid 'adopted' status. Must be true or false.",
-        });
-      }
-
-      try {
-        const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
-
-        if (!pet) {
-          return res.status(404).send({ message: "Pet not found." });
+        if (!ObjectId.isValid(petId)) {
+          return res.status(400).send({ message: "Invalid pet ID format." });
         }
-
-        // Check if the user is the creator of the pet OR if the user is an admin
-        if (pet.createdByUserId !== authUserId && userRole !== "admin") {
-          return res.status(403).send({
-            message:
-              "Forbidden: You do not have permission to update this pet status.",
+        if (typeof adopted !== "boolean") {
+          return res.status(400).send({
+            message: "Invalid 'adopted' status. Must be true or false.",
           });
         }
 
-        if (pet.adopted === adopted) { // No change needed
-            return res.status(200).send({ success: false, message: "Pet status is already as requested." });
-        }
+        try {
+          const pet = await petsCollection.findOne({
+            _id: new ObjectId(petId),
+          });
 
-        const result = await petsCollection.updateOne(
-          { _id: new ObjectId(petId) },
-          { $set: { adopted: adopted } }
-        );
+          if (!pet) {
+            return res.status(404).send({ message: "Pet not found." });
+          }
 
-        if (result.matchedCount === 0) {
-          return res
-            .status(404)
-            .send({ message: "Pet not found or status already updated." });
+          // Check if the user is the creator of the pet OR if the user is an admin
+          if (pet.createdByUserId !== authUserId && userRole !== "admin") {
+            return res.status(403).send({
+              message:
+                "Forbidden: You do not have permission to update this pet status.",
+            });
+          }
+
+          if (pet.adopted === adopted) {
+            // No change needed
+            return res.status(200).send({
+              success: false,
+              message: "Pet status is already as requested.",
+            });
+          }
+
+          const result = await petsCollection.updateOne(
+            { _id: new ObjectId(petId) },
+            { $set: { adopted: adopted } }
+          );
+
+          if (result.matchedCount === 0) {
+            return res
+              .status(404)
+              .send({ message: "Pet not found or status already updated." });
+          }
+          res.send({
+            success: true,
+            message: `Pet adoption status updated to ${adopted}.`,
+          });
+        } catch (error) {
+          console.error("Error updating pet status:", error);
+          res.status(500).send({ message: "Failed to update pet status." });
         }
-        res.send({
-          success: true,
-          message: `Pet adoption status updated to ${adopted}.`,
-        });
-      } catch (error) {
-        console.error("Error updating pet status:", error);
-        res.status(500).send({ message: "Failed to update pet status." });
       }
-    });
+    );
 
     // Update a Pet's details (Protected - only by creator or admin)
     app.patch("/pets/:id", verifyFBToken, attachUserRole, async (req, res) => {
@@ -523,10 +578,15 @@ async function run() {
           updatedPetData;
 
         // Optionally, ensure petAge is a number if it's being updated
-        if (dataToUpdate.petAge !== undefined && typeof dataToUpdate.petAge !== "number") {
+        if (
+          dataToUpdate.petAge !== undefined &&
+          typeof dataToUpdate.petAge !== "number"
+        ) {
           dataToUpdate.petAge = parseInt(dataToUpdate.petAge);
           if (isNaN(dataToUpdate.petAge) || dataToUpdate.petAge < 0) {
-            return res.status(400).send({ message: "Pet age must be a non-negative number." });
+            return res
+              .status(400)
+              .send({ message: "Pet age must be a non-negative number." });
           }
         }
 
@@ -546,7 +606,6 @@ async function run() {
         res.status(500).send({ message: "Failed to update pet." });
       }
     });
-
 
     // Donation Campaign Public Routes
     app.get("/donation-cam", async (req, res) => {
@@ -606,168 +665,230 @@ async function run() {
     });
 
     // Create Donation Campaign (Protected - any logged-in user)
-    app.post("/donation-cam", verifyFBToken, attachUserRole, async (req, res) => {
-      const newCampaign = req.body;
-      const creatorId = req.decoded.uid; // Get creator's UID from verified token
+    app.post(
+      "/donation-cam",
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const newCampaign = req.body;
+        const creatorId = req.decoded.uid; // Get creator's UID from verified token
 
-      // Basic validation (add more as needed)
-      if (
-        !newCampaign.petName ||
-        !newCampaign.targetAmount ||
-        !newCampaign.category ||
-        !newCampaign.endDate || // Ensure endDate is provided
-        !creatorId
-      ) {
-        return res
-          .status(400)
-          .send({ message: "Missing required campaign fields." });
-      }
-      if (
-        typeof newCampaign.targetAmount !== "number" ||
-        newCampaign.targetAmount <= 0
-      ) {
-        return res
-          .status(400)
-          .send({ message: "Target amount must be a positive number." });
-      }
+        // Basic validation (add more as needed)
+        if (
+          !newCampaign.petName ||
+          !newCampaign.targetAmount ||
+          !newCampaign.category ||
+          !newCampaign.endDate || // Ensure endDate is provided
+          !creatorId
+        ) {
+          return res
+            .status(400)
+            .send({ message: "Missing required campaign fields." });
+        }
+        if (
+          typeof newCampaign.targetAmount !== "number" ||
+          newCampaign.targetAmount <= 0
+        ) {
+          return res
+            .status(400)
+            .send({ message: "Target amount must be a positive number." });
+        }
 
-      // Validate endDate
-      const endDate = new Date(newCampaign.endDate);
-      if (isNaN(endDate.getTime())) { // Check for invalid date
-        return res.status(400).send({ message: "Invalid endDate format." });
-      }
-      if (endDate < new Date()) {
-        return res.status(400).send({ message: "End date cannot be in the past." });
-      }
+        // Validate endDate
+        const endDate = new Date(newCampaign.endDate);
+        if (isNaN(endDate.getTime())) {
+          // Check for invalid date
+          return res.status(400).send({ message: "Invalid endDate format." });
+        }
+        if (endDate < new Date()) {
+          return res
+            .status(400)
+            .send({ message: "End date cannot be in the past." });
+        }
 
-      try {
-        const campaignToInsert = {
-          ...newCampaign,
-          createdByUserId: creatorId, // Store the Firebase UID of the creator
-          createdAt: new Date(), // Store creation date as a Date object
-          donatedAmount: 0, // Ensure initial donated amount is 0
-          donorCount: 0, // Ensure initial donor count is 0
-        };
+        try {
+          const campaignToInsert = {
+            ...newCampaign,
+            createdByUserId: creatorId, // Store the Firebase UID of the creator
+            createdAt: new Date(), // Store creation date as a Date object
+            donatedAmount: 0, // Ensure initial donated amount is 0
+            donorCount: 0, // Ensure initial donor count is 0
+          };
 
-        const result = await donationCamCollection.insertOne(campaignToInsert);
-        res.status(201).send({
-          success: true,
-          message: "Campaign created successfully!",
-          insertedId: result.insertedId,
-        });
-      } catch (error) {
-        console.error("Error creating new donation campaign:", error);
-        res
-          .status(500)
-          .send({ message: "Failed to create donation campaign." });
+          const result = await donationCamCollection.insertOne(
+            campaignToInsert
+          );
+          res.status(201).send({
+            success: true,
+            message: "Campaign created successfully!",
+            insertedId: result.insertedId,
+          });
+        } catch (error) {
+          console.error("Error creating new donation campaign:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to create donation campaign." });
+        }
       }
-    });
+    );
 
     // Update Donation Campaign (Protected - only by creator or admin)
-    app.patch("/donation-cam/:id", verifyFBToken, attachUserRole, async (req, res) => {
-      const campaignId = req.params.id;
-      const updatedCampaignData = req.body;
-      const authUserId = req.decoded.uid;
-      const userRole = req.decoded.role;
+    app.patch(
+      "/donation-cam/:id",
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const campaignId = req.params.id;
+        const updatedCampaignData = req.body;
+        const authUserId = req.decoded.uid;
+        const userRole = req.decoded.role;
 
-      if (!ObjectId.isValid(campaignId)) {
-        return res.status(400).send({ message: "Invalid campaign ID format." });
-      }
-
-      try {
-        const campaign = await donationCamCollection.findOne({ _id: new ObjectId(campaignId) });
-
-        if (!campaign) {
-          return res.status(404).send({ message: "Donation campaign not found." });
+        if (!ObjectId.isValid(campaignId)) {
+          return res
+            .status(400)
+            .send({ message: "Invalid campaign ID format." });
         }
 
-        // Ensure the user is the creator of the campaign OR an admin
-        if (campaign.createdByUserId !== authUserId && userRole !== "admin") {
-          return res.status(403).send({
-            message: "Forbidden: You do not have permission to update this campaign.",
+        try {
+          const campaign = await donationCamCollection.findOne({
+            _id: new ObjectId(campaignId),
           });
-        }
 
-        // Prepare update document, exclude _id, createdByUserId, createdAt, donatedAmount, donorCount
-        const { _id, createdByUserId, createdAt, donatedAmount, donorCount, ...dataToUpdate } = updatedCampaignData;
+          if (!campaign) {
+            return res
+              .status(404)
+              .send({ message: "Donation campaign not found." });
+          }
 
-        // Basic validation for updated fields (e.g., targetAmount)
-        if (dataToUpdate.targetAmount !== undefined) {
-          dataToUpdate.targetAmount = parseFloat(dataToUpdate.targetAmount);
-          if (isNaN(dataToUpdate.targetAmount) || dataToUpdate.targetAmount <= 0) {
-            return res.status(400).send({ message: "Target amount must be a positive number." });
+          // Ensure the user is the creator of the campaign OR an admin
+          if (campaign.createdByUserId !== authUserId && userRole !== "admin") {
+            return res.status(403).send({
+              message:
+                "Forbidden: You do not have permission to update this campaign.",
+            });
           }
-        }
-        if (dataToUpdate.endDate !== undefined) {
-          const endDate = new Date(dataToUpdate.endDate);
-          if (isNaN(endDate.getTime())) {
-            return res.status(400).send({ message: "Invalid endDate format." });
-          }
-          if (endDate < new Date()) {
-            // Allow updating to a past date only if the campaign is already ended
-            if (campaign.donatedAmount < campaign.targetAmount) { // If not fully funded
-                return res.status(400).send({ message: "Cannot set end date to past if campaign is not fully funded." });
+
+          // Prepare update document, exclude _id, createdByUserId, createdAt, donatedAmount, donorCount
+          const {
+            _id,
+            createdByUserId,
+            createdAt,
+            donatedAmount,
+            donorCount,
+            ...dataToUpdate
+          } = updatedCampaignData;
+
+          // Basic validation for updated fields (e.g., targetAmount)
+          if (dataToUpdate.targetAmount !== undefined) {
+            dataToUpdate.targetAmount = parseFloat(dataToUpdate.targetAmount);
+            if (
+              isNaN(dataToUpdate.targetAmount) ||
+              dataToUpdate.targetAmount <= 0
+            ) {
+              return res
+                .status(400)
+                .send({ message: "Target amount must be a positive number." });
             }
           }
+          if (dataToUpdate.endDate !== undefined) {
+            const endDate = new Date(dataToUpdate.endDate);
+            if (isNaN(endDate.getTime())) {
+              return res
+                .status(400)
+                .send({ message: "Invalid endDate format." });
+            }
+            if (endDate < new Date()) {
+              // Allow updating to a past date only if the campaign is already ended
+              if (campaign.donatedAmount < campaign.targetAmount) {
+                // If not fully funded
+                return res.status(400).send({
+                  message:
+                    "Cannot set end date to past if campaign is not fully funded.",
+                });
+              }
+            }
+          }
+
+          const result = await donationCamCollection.updateOne(
+            { _id: new ObjectId(campaignId) },
+            { $set: dataToUpdate }
+          );
+
+          if (result.matchedCount === 0) {
+            return res
+              .status(404)
+              .send({ message: "Campaign not found or no changes made." });
+          }
+          res.send({
+            success: true,
+            message: "Donation campaign updated successfully!",
+          });
+        } catch (error) {
+          console.error("Error updating donation campaign:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to update donation campaign." });
         }
-
-
-        const result = await donationCamCollection.updateOne(
-          { _id: new ObjectId(campaignId) },
-          { $set: dataToUpdate }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).send({ message: "Campaign not found or no changes made." });
-        }
-        res.send({ success: true, message: "Donation campaign updated successfully!" });
-      } catch (error) {
-        console.error("Error updating donation campaign:", error);
-        res.status(500).send({ message: "Failed to update donation campaign." });
       }
-    });
+    );
 
     // Pause/Unpause Donation Campaign (Admin or Creator)
-    app.patch("/donation-cam/status/:id", verifyFBToken, attachUserRole, async (req, res) => {
-      const campaignId = req.params.id;
-      const { paused } = req.body; // Expecting { paused: true/false }
-      const authUserId = req.decoded.uid;
-      const userRole = req.decoded.role;
+    app.patch(
+      "/donation-cam/status/:id",
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const campaignId = req.params.id;
+        const { paused } = req.body; // Expecting { paused: true/false }
+        const authUserId = req.decoded.uid;
+        const userRole = req.decoded.role;
 
-      if (!ObjectId.isValid(campaignId)) {
-        return res.status(400).send({ message: "Invalid campaign ID format." });
-      }
-      if (typeof paused !== "boolean") {
-        return res.status(400).send({ message: "Invalid 'paused' status. Must be true or false." });
-      }
-
-      try {
-        const campaign = await donationCamCollection.findOne({ _id: new ObjectId(campaignId) });
-
-        if (!campaign) {
-          return res.status(404).send({ message: "Donation campaign not found." });
+        if (!ObjectId.isValid(campaignId)) {
+          return res
+            .status(400)
+            .send({ message: "Invalid campaign ID format." });
         }
-
-        if (campaign.createdByUserId !== authUserId && userRole !== "admin") {
-          return res.status(403).send({
-            message: "Forbidden: You do not have permission to change this campaign's status.",
+        if (typeof paused !== "boolean") {
+          return res.status(400).send({
+            message: "Invalid 'paused' status. Must be true or false.",
           });
         }
 
-        const result = await donationCamCollection.updateOne(
-          { _id: new ObjectId(campaignId) },
-          { $set: { paused: paused } }
-        );
+        try {
+          const campaign = await donationCamCollection.findOne({
+            _id: new ObjectId(campaignId),
+          });
 
-        if (result.matchedCount === 0) {
-          return res.status(404).send({ message: "Campaign not found or status already updated." });
+          if (!campaign) {
+            return res
+              .status(404)
+              .send({ message: "Donation campaign not found." });
+          }
+
+          if (campaign.createdByUserId !== authUserId && userRole !== "admin") {
+            return res.status(403).send({
+              message:
+                "Forbidden: You do not have permission to change this campaign's status.",
+            });
+          }
+
+          const result = await donationCamCollection.updateOne(
+            { _id: new ObjectId(campaignId) },
+            { $set: { paused: paused } }
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).send({
+              message: "Campaign not found or status already updated.",
+            });
+          }
+          res.send({ success: true, message: `Campaign status updated to paused: ${paused}.` });
+        } catch (error) {
+          console.error("Error updating campaign status:", error);
+          res.status(500).send({ message: "Failed to update campaign status." });
         }
-        res.send({ success: true, message: `Campaign status updated to paused: ${paused}.` });
-      } catch (error) {
-        console.error("Error updating campaign status:", error);
-        res.status(500).send({ message: "Failed to update campaign status." });
       }
-    });
+    );
 
     // Delete Donation Campaign (Admin or Creator)
     app.delete("/donation-cam/:id", verifyFBToken, attachUserRole, async (req, res) => {
@@ -834,7 +955,6 @@ async function run() {
       }
     });
 
-
     // Wanted Pets Public Route
     app.get("/wanted-pets", async (req, res) => {
       try {
@@ -853,16 +973,17 @@ async function run() {
     // Submit an Adoption Request (Protected - by any logged-in user)
     app.post("/adoption-requests", verifyFBToken, attachUserRole, async (req, res) => {
       const requestData = req.body;
-      const requesterId = req.decoded.uid; // User making the request
+      const requesterId = req.decoded.uid;
 
-      // Basic validation
+      // Basic validation: ownerId is now optional, but other fields are still required
       if (
         !requestData.petId ||
-        !requestData.ownerId ||
         !requestData.requesterName ||
         !requestData.requesterEmail ||
         !requestData.requesterPhone ||
-        !requestData.requesterLocation
+        !requestData.requesterLocation ||
+        !requestData.petName || // Added validation for petName
+        !requestData.petImage // Added validation for petImage
       ) {
         return res
           .status(400)
@@ -883,8 +1004,10 @@ async function run() {
             .send({ message: "This pet has already been adopted." });
         }
 
-        // Prevent a user from requesting their own pet
-        if (pet.createdByUserId === requesterId) {
+        // IMPORTANT: Modify "Prevent a user from requesting their own pet" check
+        // This check now only applies if pet.createdByUserId actually exists on the pet object.
+        // If createdByUserId is missing (e.g., for older data), this check is skipped.
+        if (pet.createdByUserId && pet.createdByUserId === requesterId) {
           return res
             .status(400)
             .send({ message: "You cannot request to adopt your own pet." });
@@ -905,12 +1028,15 @@ async function run() {
         }
 
         const requestToInsert = {
-          ...requestData,
-          requesterId: requesterId, // Store the Firebase UID of the requester
+          ...requestData, // This includes petId, ownerId (can be null), requesterName, etc.
+          requesterId: requesterId, // The ID of the user making the request
           requestDate: new Date(), // Store request date
           status: "pending", // Default status
-          petName: pet.petName, // Store pet name for easier display
-          petImage: pet.petImage, // Store pet image for easier display
+          // petName and petImage are now expected to be in requestData from frontend
+          // so no need to derive from `pet` object here.
+          // If you want to ensure they are consistent with the DB, you could use:
+          // petName: pet.name,
+          // petImage: pet.image,
         };
 
         const result = await adoptionRequestsCollection.insertOne(
@@ -1011,7 +1137,8 @@ async function run() {
               .send({ message: "Associated pet not found." });
           }
 
-          if (pet.createdByUserId !== authUserId && userRole !== "admin") {
+          // This check also needs to be robust against missing createdByUserId
+          if (pet.createdByUserId && pet.createdByUserId !== authUserId && userRole !== "admin") {
             return res.status(403).send({
               message:
                 "Forbidden: You do not have permission to update this request.",
@@ -1083,6 +1210,7 @@ async function run() {
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountInCents, // amount in cents
           currency: "usd",
+          payment_method_types: ["card"], // Explicitly define payment method types
           metadata: {
             campaignId: campaignId,
             userId: authenticatedUserId,
