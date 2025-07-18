@@ -47,6 +47,7 @@ let petsCollection;
 let donationCamCollection; // Collection for donation campaigns
 let donationsCollection; // Collection for individual donation records
 let wantedPetsCollection; // Collection for wanted pet requests
+let adoptionRequestsCollection; 
 
 // Stripe Secret Key from .env
 // IMPORTANT: Ensure process.env.STRIPE_SECRET_KEY is correctly set in your .env
@@ -84,7 +85,9 @@ async function run() {
     petsCollection = db.collection("pets");
     donationCamCollection = db.collection("donation-cam"); // Using 'donation-cam' as per your provided code
     donationsCollection = db.collection("donations"); // New collection for individual donations
-    wantedPetsCollection = db.collection("wantedPets"); // Initialize wantedPets collection
+    wantedPetsCollection = db.collection("wantedPets");
+    adoptionRequestsCollection = db.collection("adoptionRequests")
+    // Initialize wantedPets collection
 
     // Optional: Log collection counts to confirm data presence
     const userCount = await usersCollection.countDocuments();
