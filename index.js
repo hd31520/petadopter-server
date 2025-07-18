@@ -1100,6 +1100,8 @@ async function run() {
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
+
+        
         const requestId = req.params.id;
         const { status } = req.body; // Expecting { status: 'accepted' | 'rejected' }
         const authUserId = req.decoded.uid;
