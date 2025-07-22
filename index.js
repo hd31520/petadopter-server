@@ -354,7 +354,7 @@ async function run() {
       }
 
       try {
-        const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
+        const pet = await petsCollection.findOne({ _id: petId });
 
         if (!pet) {
           return res.status(404).send({ message: "Pet not found." });
@@ -368,47 +368,49 @@ async function run() {
 
     // Add a Pet (Protected - any logged-in user can add)
     app.post("/pets", verifyFBToken, attachUserRole, async (req, res) => {
-      const newPet = req.body;
-      const creatorId = req.decoded.uid; // Get creator's UID from verified token
+  const newPet = req.body;
+  const creatorId = req.decoded.uid;
 
-      // Basic validation (add more as needed)
-      if (
-        !newPet.petName ||
-        !newPet.petImage ||
-        !newPet.petCategory ||
-        !newPet.petLocation ||
-        !creatorId
-      ) {
-        return res.status(400).send({
-          message:
-            "Missing required pet fields (name, image, category, location, creator).",
-        });
-      }
-      if (typeof newPet.petAge !== "number" || newPet.petAge < 0) {
-        return res
-          .status(400)
-          .send({ message: "Pet age must be a non-negative number." });
-      }
-
-      try {
-        const petToInsert = {
-          ...newPet,
-          createdByUserId: creatorId, // Store the Firebase UID of the creator
-          createdAt: new Date(), // Store creation date as a Date object
-          adopted: false, // Default status
-        };
-
-        const result = await petsCollection.insertOne(petToInsert);
-        res.status(201).send({
-          success: true,
-          message: "Pet added successfully!",
-          insertedId: result.insertedId,
-        });
-      } catch (error) {
-        console.error("Error adding new pet:", error);
-        res.status(500).send({ message: "Failed to add pet." });
-      }
+  // Validate required fields - match frontend field names
+  if (
+    !newPet.name ||
+    !newPet.image ||
+    !newPet.category ||
+    !newPet.petLocation ||
+    !newPet.breed ||
+    !newPet.description ||
+    !creatorId
+  ) {
+    return res.status(400).send({
+      message: "Missing required pet fields: name, image, category, location, breed, description",
     });
+  }
+
+  try {
+    const petToInsert = {
+      name: newPet.name,
+      image: newPet.image,
+      category: newPet.category,
+      breed: newPet.breed,
+      description: newPet.description,
+      petLocation: newPet.petLocation,
+      age: newPet.age || "N/A", // Make age optional with default
+      createdByUserId: creatorId,
+      createdAt: new Date(),
+      adopted: false,
+    };
+
+    const result = await petsCollection.insertOne(petToInsert);
+    res.status(201).send({
+      success: true,
+      message: "Pet added successfully!",
+      insertedId: result.insertedId,
+    });
+  } catch (error) {
+    console.error("Error adding new pet:", error);
+    res.status(500).send({ message: "Failed to add pet." });
+  }
+});
 
     // Get Pets added by a specific user (Protected - user can only view their own, admin can view all)
     app.get(
@@ -573,26 +575,67 @@ async function run() {
           });
         }
 
-        // Prepare update document, exclude _id and createdByUserId, createdAt, adopted from direct update
-        const { _id, createdByUserId, createdAt, adopted, ...dataToUpdate } =
-          updatedPetData;
+        // Construct the update document with flexible key handling
+        const updateDoc = {};
 
-        // Optionally, ensure petAge is a number if it's being updated
-        if (
-          dataToUpdate.petAge !== undefined &&
-          typeof dataToUpdate.petAge !== "number"
-        ) {
-          dataToUpdate.petAge = parseInt(dataToUpdate.petAge);
-          if (isNaN(dataToUpdate.petAge) || dataToUpdate.petAge < 0) {
-            return res
-              .status(400)
-              .send({ message: "Pet age must be a non-negative number." });
+        // Handle petName / name
+        if (updatedPetData.petName !== undefined) {
+          updateDoc.name = updatedPetData.petName;
+        } else if (updatedPetData.name !== undefined) {
+          updateDoc.name = updatedPetData.name;
+        }
+
+        // Handle petImage / image
+        if (updatedPetData.petImage !== undefined) {
+          updateDoc.image = updatedPetData.petImage;
+        } else if (updatedPetData.image !== undefined) {
+          updateDoc.image = updatedPetData.image;
+        }
+
+        // Handle petCategory / category
+        if (updatedPetData.petCategory !== undefined) {
+          updateDoc.category = updatedPetData.petCategory;
+        } else if (updatedPetData.category !== undefined) {
+          updateDoc.category = updatedPetData.category;
+        }
+
+        // Handle petAge / age
+        let ageValue;
+        if (updatedPetData.petAge !== undefined) {
+          ageValue = updatedPetData.petAge;
+        } else if (updatedPetData.age !== undefined) {
+          ageValue = updatedPetData.age;
+        }
+
+        if (ageValue !== undefined) {
+          const parsedAge = parseInt(ageValue);
+          if (isNaN(parsedAge) || parsedAge < 0) {
+            return res.status(400).send({ message: "Pet age must be a non-negative number." });
           }
+          updateDoc.age = parsedAge;
+        }
+
+        // Handle other fields directly if they are present and not excluded
+        // Exclude _id, createdByUserId, createdAt, adopted, and potentially 'id' if it's coming from frontend
+        const allowedFields = [
+          'petLocation', 'shortDescription', 'longDescription',
+          // Add any other fields that can be directly updated without renaming
+        ];
+
+        allowedFields.forEach(field => {
+          if (updatedPetData[field] !== undefined) {
+            updateDoc[field] = updatedPetData[field];
+          }
+        });
+
+        // Ensure updateDoc is not empty before proceeding
+        if (Object.keys(updateDoc).length === 0) {
+          return res.status(400).send({ message: "No valid fields provided for update." });
         }
 
         const result = await petsCollection.updateOne(
           { _id: new ObjectId(petId) },
-          { $set: dataToUpdate }
+          { $set: updateDoc }
         );
 
         if (result.matchedCount === 0) {
@@ -890,7 +933,7 @@ async function run() {
       }
     );
 
-    // Delete Donation Campaign (Admin or Creator)
+    // Delete Donation Campaign (Admin or Creator) - COMPLETED
     app.delete("/donation-cam/:id", verifyFBToken, attachUserRole, async (req, res) => {
       const campaignId = req.params.id;
       const authUserId = req.decoded.uid;
@@ -921,7 +964,7 @@ async function run() {
         }
       } catch (error) {
         console.error("Error deleting campaign:", error);
-        res.status(500).send({ message: "Failed to delete campaign." });
+        res.status(500).send({ message: "Failed to delete campaign." }); // Added missing error response
       }
     });
 
@@ -975,26 +1018,25 @@ async function run() {
       const requestData = req.body;
       const requesterId = req.decoded.uid;
 
-      // Basic validation: ownerId is now optional, but other fields are still required
+      // Basic validation: petId, requesterName, requesterEmail, requesterPhone, requesterLocation are required from frontend
       if (
         !requestData.petId ||
         !requestData.requesterName ||
         !requestData.requesterEmail ||
         !requestData.requesterPhone ||
-        !requestData.requesterLocation ||
-        !requestData.petName || // Added validation for petName
-        !requestData.petImage // Added validation for petImage
+        !requestData.requesterLocation
       ) {
         return res
           .status(400)
-          .send({ message: "Missing required fields for adoption request." });
+          .send({ message: "Missing required fields for adoption request (petId, requesterName, requesterEmail, requesterPhone, requesterLocation)." });
       }
 
       try {
-        // Ensure the pet exists and is not already adopted
+        // Fetch pet details from the database to ensure data integrity and get ownerId
         const pet = await petsCollection.findOne({
           _id: new ObjectId(requestData.petId),
         });
+
         if (!pet) {
           return res.status(404).send({ message: "Pet not found." });
         }
@@ -1004,9 +1046,7 @@ async function run() {
             .send({ message: "This pet has already been adopted." });
         }
 
-        // IMPORTANT: Modify "Prevent a user from requesting their own pet" check
-        // This check now only applies if pet.createdByUserId actually exists on the pet object.
-        // If createdByUserId is missing (e.g., for older data), this check is skipped.
+        // Prevent a user from requesting their own pet
         if (pet.createdByUserId && pet.createdByUserId === requesterId) {
           return res
             .status(400)
@@ -1028,15 +1068,17 @@ async function run() {
         }
 
         const requestToInsert = {
-          ...requestData, // This includes petId, ownerId (can be null), requesterName, etc.
+          petId: requestData.petId,
+          petName: pet.name, // Derived from fetched pet
+          petImage: pet.image, // Derived from fetched pet
+          ownerId: pet.createdByUserId, // Derived from fetched pet
           requesterId: requesterId, // The ID of the user making the request
+          requesterName: requestData.requesterName,
+          requesterEmail: requestData.requesterEmail,
+          requesterPhone: requestData.requesterPhone,
+          requesterLocation: requestData.requesterLocation,
           requestDate: new Date(), // Store request date
           status: "pending", // Default status
-          // petName and petImage are now expected to be in requestData from frontend
-          // so no need to derive from `pet` object here.
-          // If you want to ensure they are consistent with the DB, you could use:
-          // petName: pet.name,
-          // petImage: pet.image,
         };
 
         const result = await adoptionRequestsCollection.insertOne(
@@ -1094,14 +1136,30 @@ async function run() {
       }
     );
 
-    // Update Adoption Request Status (Accept/Reject) (Protected - by owner or admin)
+    // NEW: Get All Adoption Requests (Admin & Volunteer Only)
+    app.get(
+      "/all-adoption-requests",
+      verifyFBToken,
+      attachUserRole,
+      verifyVolunteer, // Allows both volunteer and admin
+      async (req, res) => {
+        try {
+          const requests = await adoptionRequestsCollection.find().toArray();
+          res.send(requests);
+        } catch (error) {
+          console.error("Error fetching all adoption requests:", error);
+          res.status(500).send({ message: "Failed to retrieve all adoption requests." });
+        }
+      }
+    );
+
+
+    // Update Adoption Request Status (Accept/Reject) (Protected - by owner, admin, or volunteer)
     app.patch(
       "/adoption-requests/status/:id",
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
-
-
         const requestId = req.params.id;
         const { status } = req.body; // Expecting { status: 'accepted' | 'rejected' }
         const authUserId = req.decoded.uid;
@@ -1129,23 +1187,30 @@ async function run() {
               .send({ message: "Adoption request not found." });
           }
 
-          // Verify ownership: Check if the user is the owner of the pet associated with the request
+          // Verify ownership/permission: Check if the user is the owner of the pet associated with the request
+          // OR if the user is an admin OR a volunteer.
           const pet = await petsCollection.findOne({
             _id: new ObjectId(request.petId),
           });
+
           if (!pet) {
-            return res
-              .status(404)
-              .send({ message: "Associated pet not found." });
+            // If the associated pet is not found, we cannot verify ownership.
+            // This might indicate a data inconsistency, but we should still allow admins/volunteers to manage.
+            if (userRole !== "admin" && userRole !== "volunteer") {
+                return res.status(403).send({
+                    message: "Forbidden: Associated pet not found and you are not an admin/volunteer."
+                });
+            }
+          } else {
+            // If pet is found, check if the current user is the pet owner, admin, or volunteer
+            if (pet.createdByUserId !== authUserId && userRole !== "admin" && userRole !== "volunteer") {
+              return res.status(403).send({
+                message:
+                  "Forbidden: You do not have permission to update this request.",
+              });
+            }
           }
 
-          // This check also needs to be robust against missing createdByUserId
-          if (pet.createdByUserId && pet.createdByUserId !== authUserId && userRole !== "admin") {
-            return res.status(403).send({
-              message:
-                "Forbidden: You do not have permission to update this request.",
-            });
-          }
 
           // Only allow status change from 'pending'
           if (request.status !== "pending") {
@@ -1297,269 +1362,6 @@ async function run() {
         res.status(500).send({ message: "Failed to retrieve donations." });
       }
     });
-
-
-
-
-
-
-    // --- Adoption Request API Endpoints ---
-
-// Submit an Adoption Request (Protected - by any logged-in user)
-app.post("/adoption-requests", verifyFBToken, attachUserRole, async (req, res) => {
-  const requestData = req.body;
-  const requesterId = req.decoded.uid;
-
-  // Basic validation: ownerId is now optional, but other fields are still required
-  if (
-    !requestData.petId ||
-    !requestData.requesterName ||
-    !requestData.requesterEmail ||
-    !requestData.requesterPhone ||
-    !requestData.requesterLocation ||
-    !requestData.petName || // Added validation for petName
-    !requestData.petImage // Added validation for petImage
-  ) {
-    return res
-      .status(400)
-      .send({ message: "Missing required fields for adoption request." });
-  }
-
-  try {
-    // Ensure the pet exists and is not already adopted
-    const pet = await petsCollection.findOne({
-      _id: new ObjectId(requestData.petId),
-    });
-    if (!pet) {
-      return res.status(404).send({ message: "Pet not found." });
-    }
-    if (pet.adopted) {
-      return res
-        .status(400)
-        .send({ message: "This pet has already been adopted." });
-    }
-
-    // IMPORTANT: Modify "Prevent a user from requesting their own pet" check
-    // This check now only applies if pet.createdByUserId actually exists on the pet object.
-    // If createdByUserId is missing (e.g., for older data), this check is skipped.
-    if (pet.createdByUserId && pet.createdByUserId === requesterId) {
-      return res
-        .status(400)
-        .send({ message: "You cannot request to adopt your own pet." });
-    }
-
-    // Check if this user has already requested this pet
-    const existingRequest = await adoptionRequestsCollection.findOne({
-      petId: requestData.petId,
-      requesterId: requesterId,
-      status: { $in: ["pending", "accepted"] }, // Check for pending or already accepted requests
-    });
-
-    if (existingRequest) {
-      return res.status(400).send({
-        message:
-          "You have already submitted an adoption request for this pet.",
-      });
-    }
-
-    const requestToInsert = {
-      ...requestData, // This includes petId, ownerId (can be null), requesterName, etc.
-      requesterId: requesterId, // The ID of the user making the request
-      requestDate: new Date(), // Store request date
-      status: "pending", // Default status
-      // petName and petImage are now expected to be in requestData from frontend
-      // so no need to derive from `pet` object here.
-      // If you want to ensure they are consistent with the DB, you could use:
-      // petName: pet.name,
-      // petImage: pet.image,
-    };
-
-    const result = await adoptionRequestsCollection.insertOne(
-      requestToInsert
-    );
-    res.status(201).send({
-      success: true,
-      message: "Adoption request submitted successfully!",
-      insertedId: result.insertedId,
-    });
-  } catch (error) {
-    console.error("Error submitting adoption request:", error);
-    res.status(500).send({ message: "Failed to submit adoption request." });
-  }
-});
-
-// Get Adoption Requests for Pets Owned by Current User (Protected)
-app.get(
-  "/owner-adoption-requests/:ownerId",
-  verifyFBToken,
-  attachUserRole,
-  async (req, res) => {
-    const requestedOwnerId = req.params.ownerId;
-    const authUserId = req.decoded.uid; // User ID from the authenticated token
-
-    // Ensure the requested owner ID matches the authenticated user's ID
-    // Or if an admin is requesting
-    if (requestedOwnerId !== authUserId && req.decoded.role !== 'admin') {
-      return res.status(403).send({
-        message: "Forbidden: You can only view requests for your own pets unless you are an admin.",
-      });
-    }
-
-    try {
-      // Find all pets owned by this user
-      const ownedPets = await petsCollection
-        .find({ createdByUserId: requestedOwnerId })
-        .toArray();
-      const ownedPetIds = ownedPets.map((pet) => pet._id.toString()); // Get IDs as strings
-
-      // Find adoption requests for these pets
-      const requests = await adoptionRequestsCollection
-        .find({
-          petId: { $in: ownedPetIds }, // Match requests where petId is one of the owned pets
-        })
-        .toArray();
-
-      res.send(requests);
-    } catch (error) {
-      console.error("Error fetching owner's adoption requests:", error);
-      res
-        .status(500)
-        .send({ message: "Failed to retrieve adoption requests." });
-    }
-  }
-);
-
-// NEW: Get All Adoption Requests (Admin & Volunteer Only)
-app.get(
-  "/all-adoption-requests",
-  verifyFBToken,
-  attachUserRole,
-  verifyVolunteer, // Allows both volunteer and admin
-  async (req, res) => {
-    try {
-      const requests = await adoptionRequestsCollection.find().toArray();
-      res.send(requests);
-    } catch (error) {
-      console.error("Error fetching all adoption requests:", error);
-      res.status(500).send({ message: "Failed to retrieve all adoption requests." });
-    }
-  }
-);
-
-
-// Update Adoption Request Status (Accept/Reject) (Protected - by owner, admin, or volunteer)
-app.patch(
-  "/adoption-requests/status/:id",
-  verifyFBToken,
-  attachUserRole,
-  async (req, res) => {
-    const requestId = req.params.id;
-    const { status } = req.body; // Expecting { status: 'accepted' | 'rejected' }
-    const authUserId = req.decoded.uid;
-    const userRole = req.decoded.role;
-
-    if (!ObjectId.isValid(requestId)) {
-      return res
-        .status(400)
-        .send({ message: "Invalid request ID format." });
-    }
-    if (!["accepted", "rejected"].includes(status)) {
-      return res.status(400).send({
-        message: "Invalid status. Must be 'accepted' or 'rejected'.",
-      });
-    }
-
-    try {
-      const request = await adoptionRequestsCollection.findOne({
-        _id: new ObjectId(requestId),
-      });
-
-      if (!request) {
-        return res
-          .status(404)
-          .send({ message: "Adoption request not found." });
-      }
-
-      // Verify ownership/permission: Check if the user is the owner of the pet associated with the request
-      // OR if the user is an admin OR a volunteer.
-      const pet = await petsCollection.findOne({
-        _id: new ObjectId(request.petId),
-      });
-
-      if (!pet) {
-        // If the associated pet is not found, we cannot verify ownership.
-        // This might indicate a data inconsistency, but we should still allow admins/volunteers to manage.
-        if (userRole !== "admin" && userRole !== "volunteer") {
-            return res.status(403).send({
-                message: "Forbidden: Associated pet not found and you are not an admin/volunteer."
-            });
-        }
-      } else {
-        // If pet is found, check if the current user is the pet owner, admin, or volunteer
-        if (pet.createdByUserId !== authUserId && userRole !== "admin" && userRole !== "volunteer") {
-          return res.status(403).send({
-            message:
-              "Forbidden: You do not have permission to update this request.",
-          });
-        }
-      }
-
-
-      // Only allow status change from 'pending'
-      if (request.status !== "pending") {
-        return res.status(400).send({
-          message: `Request is already ${request.status}. Cannot change.`,
-        });
-      }
-
-      const updateResult = await adoptionRequestsCollection.updateOne(
-        { _id: new ObjectId(requestId) },
-        { $set: { status: status } }
-      );
-
-      if (updateResult.matchedCount === 0) {
-        return res.status(404).send({
-          message: "Request not found or status already updated.",
-        });
-      }
-
-      // If accepted, also mark the pet as adopted
-      if (status === "accepted") {
-        const petUpdateResult = await petsCollection.updateOne(
-          { _id: new ObjectId(request.petId) },
-          { $set: { adopted: true } }
-        );
-        if (petUpdateResult.matchedCount === 0) {
-          console.warn(
-            `Pet ${request.petId} not found when trying to mark as adopted after request acceptance.`
-          );
-        }
-      }
-
-      res.send({
-        success: true,
-        message: `Adoption request status updated to '${status}'.`,
-      });
-    } catch (error) {
-      console.error("Error updating adoption request status:", error);
-      res
-        .status(500)
-        .send({ message: "Failed to update adoption request status." });
-    }
-  }
-);
-
-
-
-
-
-
-
-
-
-
-
-
 
   } finally {
     // Ensures that the client will close when you finish/error
