@@ -561,7 +561,7 @@ async function run() {
       }
 
       try {
-        const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
+        const pet = await petsCollection.findOne({ _id:petId });
 
         if (!pet) {
           return res.status(404).send({ message: "Pet not found." });
@@ -634,7 +634,7 @@ async function run() {
         }
 
         const result = await petsCollection.updateOne(
-          { _id: new ObjectId(petId) },
+          { _id: petId},
           { $set: updateDoc }
         );
 
