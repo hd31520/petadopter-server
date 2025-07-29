@@ -1,23 +1,29 @@
-require("dotenv").config(); // MUST BE AT THE VERY TOP to ensure environment variables are loaded
+// index.js (or server.js)
+
+// Import necessary modules
+require("dotenv").config(); // Load environment variables from .env file
 const express = require("express");
 const cors = require("cors");
-const admin = require("firebase-admin"); // Firebase Admin SDK
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb"); // Added ObjectId
+const admin = require("firebase-admin"); // Firebase Admin SDK for authentication
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb"); // MongoDB driver
 
+// Initialize Express app
 const app = express();
-const port = process.env.PORT || 5000; // Use port from .env or default to 5000
+const port = process.env.PORT || 5000; // Use environment variable for port or default to 5000
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(cors()); // Enable Cross-Origin Resource Sharing for all routes (adjust for production)
+app.use(express.json()); // Enable parsing of JSON request bodies
 
-// Firebase Admin SDK Initialization
-// Decode the base64 encoded service account key from environment variable
-// IMPORTANT: Ensure process.env.FB_SERVICE_KEY is correctly base64 encoded JSON in your .env
+// --- Firebase Admin SDK Initialization ---
+// This block initializes Firebase Admin SDK using a service account key.
+// The key should be provided securely via an environment variable (base64 encoded JSON string).
 try {
-  const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
-    "utf8"
-  );
+  if (!process.env.FB_SERVICE_KEY) {
+    throw new Error("FB_SERVICE_KEY environment variable is not set.");
+  }
+  // Decode the base64 encoded service account key
+  const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString("utf8");
   const serviceAccount = JSON.parse(decodedKey);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -28,36 +34,62 @@ try {
     "Failed to initialize Firebase Admin SDK. Check FB_SERVICE_KEY in .env:",
     error.message
   );
-  // It's crucial to exit or handle this error gracefully if Firebase is mandatory
-  process.exit(1); // Exit if Firebase Admin SDK fails to initialize
+  process.exit(1); // Exit if Firebase initialization fails, as auth won't work
 }
 
-// MongoDB Connection URI from .env
+// MongoDB Connection URI from environment variables
 const uri = process.env.URI;
 
-// Global database and collection variables
+// Global variables for MongoDB collections, initialized inside run()
 let db;
 let usersCollection;
 let petsCollection;
-let donationCamCollection; // Collection for donation campaigns
-let donationsCollection; // Collection for individual donation records
-let wantedPetsCollection; // Collection for wanted pet requests
+let donationCamCollection;
+let donationsCollection;
+let wantedPetsCollection;
 let adoptionRequestsCollection;
+let tasksCollection;
 
-// Stripe Secret Key from .env
+// Stripe initialization (for payments)
 const stripe = require("stripe")(
-  process.env.STRIPE_SECRET_KEY || "sk_test_YOUR_STRIPE_SECRET_KEY_FALLBACK"
+  process.env.STRIPE_SECRET_KEY || "sk_test_YOUR_STRIPE_SECRET_KEY_FALLBACK" // Fallback for development
 );
 
-// MongoDB Connection and Server Start
+// Helper function to find a document by _id, handling both ObjectId and string IDs
+async function findDocumentById(collection, id) {
+  let document = null;
+
+  // Try to find by ObjectId first
+  if (ObjectId.isValid(id)) {
+    try {
+      document = await collection.findOne({ _id: new ObjectId(id) });
+    } catch (error) {
+      // Log a warning but don't fail, as we'll try string next
+      console.warn(`Warning: Failed to find with ObjectId for ID '${id}' in collection '${collection.collectionName}'. Error: ${error.message}`);
+    }
+  }
+
+  // If not found by ObjectId or if ID was not a valid ObjectId string, try finding by string ID
+  if (!document) {
+    try {
+      document = await collection.findOne({ _id: id });
+    } catch (error) {
+      console.error(`Error finding document with ID '${id}' as string in collection '${collection.collectionName}'. Error: ${error.message}`);
+    }
+  }
+
+  return document;
+}
+
+// Main function to connect to MongoDB and define routes
 async function run() {
-  // Check if URI is available before attempting connection
+  // Ensure MongoDB URI is defined
   if (!uri) {
     console.error("Error: MONGODB_URI is not defined in your .env file.");
     console.error(
       "Please make sure your .env file is in the root of your project and contains MONGODB_URI='YOUR_CONNECTION_STRING'"
     );
-    process.exit(1); // Exit the process if critical environment variable is missing
+    process.exit(1);
   }
 
   try {
@@ -69,34 +101,37 @@ async function run() {
       },
     });
 
-    // Connect the client to the server
-    await client.connect();
+    await client.connect(); // Connect to MongoDB
     console.log("Connected to MongoDB successfully!");
 
-    // Assign collections to global variables
-    db = client.db("adopty"); // Your database name
+    // Initialize MongoDB collections
+    db = client.db("adopty"); // Replace "adopty" with your actual database name
     usersCollection = db.collection("users");
     petsCollection = db.collection("pets");
-    donationCamCollection = db.collection("donation-cam"); // Using 'donation-cam' as per your provided code
-    donationsCollection = db.collection("donations"); // New collection for individual donations
+    donationCamCollection = db.collection("donation-cam");
+    donationsCollection = db.collection("donations");
     wantedPetsCollection = db.collection("wantedPets");
     adoptionRequestsCollection = db.collection("adoptionRequests");
+    tasksCollection = db.collection("tasks");
 
-    // Optional: Log collection counts to confirm data presence
+    // Log collection counts for debugging/monitoring
     const userCount = await usersCollection.countDocuments();
     const petCount = await petsCollection.countDocuments();
     const campaignCount = await donationCamCollection.countDocuments();
     const donationCount = await donationsCollection.countDocuments();
     const wantedPetCount = await wantedPetsCollection.countDocuments();
+    const taskCount = await tasksCollection.countDocuments();
 
     console.log(`Users in DB: ${userCount}`);
     console.log(`Pets in DB: ${petCount}`);
     console.log(`Donation Campaigns in DB: ${campaignCount}`);
     console.log(`Donations in DB: ${donationCount}`);
     console.log(`Wanted Pet Requests in DB: ${wantedPetCount}`);
+    console.log(`Tasks in DB: ${taskCount}`);
 
-    // Firebase Token Verification Middleware
-    // This middleware verifies the Firebase ID token and attaches the decoded payload to req.decoded
+    // --- Custom Middleware Functions ---
+
+    // Middleware to verify Firebase ID token from the Authorization header
     const verifyFBToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -108,7 +143,7 @@ async function run() {
 
       try {
         const decodedToken = await admin.auth().verifyIdToken(token);
-        req.decoded = decodedToken; // Attach decoded token payload to request
+        req.decoded = decodedToken; // Attach decoded token to request object (contains uid, email, etc.)
         next();
       } catch (error) {
         console.error("Firebase token verification error:", error);
@@ -118,24 +153,42 @@ async function run() {
       }
     };
 
-    // Middleware to fetch user role and attach to req.decoded
-    // This should run AFTER verifyFBToken if you need role for other middlewares
+    // Middleware to attach user role to the request object
     const attachUserRole = async (req, res, next) => {
-      if (!req.decoded || !req.decoded.email) {
-        // If verifyFBToken didn't run or failed, or email is missing
+      if (!req.decoded || !req.decoded.uid) { // Prioritize UID from decoded token
         return res
           .status(401)
-          .send({ message: "Unauthorized: User email not found." });
+          .send({ message: "Unauthorized: User UID not found in token." });
       }
       try {
-        const user = await usersCollection.findOne({
-          email: req.decoded.email,
-        });
+        // First, try to find user by Firebase UID
+        let user = await usersCollection.findOne({ uid: req.decoded.uid });
+
         if (user) {
-          req.decoded.role = user.role; // Attach role to the decoded token payload
+          req.decoded.role = user.role; // Attach role from DB
         } else {
-          // If user not found in DB, assign a default role or deny access
-          req.decoded.role = "unknown"; // Or handle as per your app logic
+          // If user not found by UID, try by email (for legacy or initial sync)
+          user = await usersCollection.findOne({ email: req.decoded.email });
+          if (user) {
+            // If found by email, update their document to include UID for future consistency
+            await usersCollection.updateOne(
+              { _id: user._id },
+              { $set: { uid: req.decoded.uid, last_log_in: new Date().toISOString() } }
+            );
+            req.decoded.role = user.role;
+          } else {
+            // If user not found in DB at all (new user), create a basic entry
+            req.decoded.role = "user"; // Default role
+            await usersCollection.insertOne({
+              email: req.decoded.email,
+              uid: req.decoded.uid, // Store Firebase UID
+              displayName: req.decoded.name || req.decoded.email,
+              photoURL: req.decoded.picture || null,
+              role: 'user', // Default role
+              createdAt: new Date().toISOString(),
+              last_log_in: new Date().toISOString()
+            });
+          }
         }
         next();
       } catch (error) {
@@ -146,17 +199,17 @@ async function run() {
       }
     };
 
-    // Admin Middleware (Requires verifyFBToken and attachUserRole before it)
+    // Middleware to verify if the user is an admin
     const verifyAdmin = (req, res, next) => {
       if (!req.decoded || req.decoded.role !== "admin") {
         return res
           .status(403)
-          .send({ message: "Forbidden: Admin access required" });
+          .send({ message: "Forbidden: Admin access required." });
       }
       next();
     };
 
-    // Volunteer Middleware (Requires verifyFBToken and attachUserRole before it)
+    // Middleware to verify if the user is a volunteer or admin
     const verifyVolunteer = (req, res, next) => {
       if (
         !req.decoded ||
@@ -164,64 +217,63 @@ async function run() {
       ) {
         return res
           .status(403)
-          .send({ message: "Forbidden: Volunteer or Admin access required" });
+          .send({ message: "Forbidden: Volunteer or Admin access required." });
       }
       next();
     };
 
-    // --- Define API Routes ---
+    // --- API Routes ---
 
-    // Root route
+    // Health check route
     app.get("/", (req, res) => {
       res.send("Adopty Backend is running!");
     });
 
-    // User routes (Handles both new user creation and existing user login updates)
+    // User management routes
     app.post("/users", async (req, res) => {
       const user = req.body;
       const email = user.email;
+      const uid = user.uid; // Expect Firebase UID from frontend
 
-      if (!email) {
-        return res.status(400).send({ message: "Email is required" });
+      if (!email || !uid) {
+        return res.status(400).send({ message: "Email and UID are required." });
       }
 
       try {
-        const userExists = await usersCollection.findOne({ email });
+        const userExists = await usersCollection.findOne({ uid }); // Find by UID for consistency
 
         if (userExists) {
-          // Update existing user's last_log_in and other profile data if provided
           const updateDoc = {
             $set: {
               last_log_in: user.last_log_in || new Date().toISOString(),
               displayName: user.displayName || userExists.displayName,
               photoURL: user.photoURL || userExists.photoURL,
-              // Do not update role here, roles should be managed by admin
+              email: email, // Ensure email is updated/added if missing
             },
           };
-          await usersCollection.updateOne({ email }, updateDoc);
+          await usersCollection.updateOne({ uid }, updateDoc); // Update by UID
           return res.status(200).send({
-            message: "User already exists. last_log_in updated.",
+            message: "User already exists. Last login updated.",
             inserted: false,
-            user: { ...userExists, ...user }, // Return updated user data (merge for client)
+            user: { ...userExists, ...user },
           });
         }
 
-        // For new users, default role to 'user'
         const newUser = {
           ...user,
-          role: user.role || "user", // Default role for new users
-          createdAt: new Date().toISOString(), // Add creation timestamp
-          last_log_in: new Date().toISOString(), // Add last login timestamp
+          uid: uid, // Store Firebase UID
+          role: user.role || "user", // Default role
+          createdAt: new Date().toISOString(),
+          last_log_in: new Date().toISOString(),
         };
         const result = await usersCollection.insertOne(newUser);
-        res.status(201).send({ ...result, user: newUser }); // Send back new user data
+        res.status(201).send({ ...result, user: newUser });
       } catch (error) {
         console.error("Error processing user:", error);
         res.status(500).send({ message: "Failed to process user data." });
       }
     });
 
-    // Get All Users (Admin only)
     app.get(
       "/users",
       verifyFBToken,
@@ -238,16 +290,15 @@ async function run() {
       }
     );
 
-    // Get User by Email (for fetching role) - Protected by verifyFBToken
     app.get(
-      "/users/:email",
+      "/users/:uid", // Changed route parameter to :uid for consistency
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
-        const requestedEmail = req.params.email;
-        // Ensure the requested email matches the authenticated user's email or if user is admin
+        const requestedUid = req.params.uid; // Now expecting UID
+        // Allow user to view their own data or admin to view any user data
         if (
-          req.decoded.email !== requestedEmail &&
+          req.decoded.uid !== requestedUid && // Compare UIDs
           req.decoded.role !== "admin"
         ) {
           return res.status(403).send({
@@ -256,9 +307,9 @@ async function run() {
           });
         }
         try {
-          const user = await usersCollection.findOne({ email: requestedEmail });
+          const user = await usersCollection.findOne({ uid: requestedUid }); // Query by UID
           if (user) {
-            res.send(user); // Send back the user object including their role
+            res.send(user);
           } else {
             res.status(404).send({ message: "User not found." });
           }
@@ -269,33 +320,38 @@ async function run() {
       }
     );
 
-    // Update User Role (Admin only)
     app.patch(
-      "/users/role/:id",
+      "/users/role/:id", // Route parameter remains :id (MongoDB _id)
       verifyFBToken,
       attachUserRole,
       verifyAdmin,
       async (req, res) => {
-        const userId = req.params.id;
-        const { role } = req.body; // Expecting { role: "admin" | "volunteer" | "user" }
+        const userId = req.params.id; // This is MongoDB _id
 
-        if (!ObjectId.isValid(userId)) {
-          return res.status(400).send({ message: "Invalid user ID format." });
-        }
-        if (!["admin", "volunteer", "user"].includes(role)) {
+        if (!["admin", "volunteer", "user"].includes(req.body.role)) {
           return res.status(400).send({ message: "Invalid role specified." });
         }
 
         try {
+          const userToUpdate = await findDocumentById(usersCollection, userId); // Use helper
+          if (!userToUpdate) {
+            return res.status(404).send({ message: "User not found." });
+          }
+
           const result = await usersCollection.updateOne(
-            { _id: new ObjectId(userId) },
-            { $set: { role: role } }
+            { _id: userToUpdate._id }, // Use found _id
+            { $set: { role: req.body.role } }
           );
 
           if (result.matchedCount === 0) {
-            return res.status(404).send({ message: "User not found." });
+            return res
+              .status(404)
+              .send({ message: "User not found or role already updated." });
           }
-          res.send({ success: true, message: `User role updated to ${role}.` });
+          res.send({
+            success: true,
+            message: `User role updated to ${req.body.role}.`,
+          });
         } catch (error) {
           console.error("Error updating user role:", error);
           res.status(500).send({ message: "Failed to update user role." });
@@ -303,22 +359,22 @@ async function run() {
       }
     );
 
-    // Delete User (Admin only)
     app.delete(
-      "/users/:id",
+      "/users/:id", // Route parameter remains :id (MongoDB _id)
       verifyFBToken,
       attachUserRole,
       verifyAdmin,
       async (req, res) => {
-        const userId = req.params.id;
-
-        if (!ObjectId.isValid(userId)) {
-          return res.status(400).send({ message: "Invalid user ID format." });
-        }
+        const userId = req.params.id; // This is MongoDB _id
 
         try {
+          const userToDelete = await findDocumentById(usersCollection, userId); // Use helper
+          if (!userToDelete) {
+            return res.status(404).send({ message: "User not found." });
+          }
+
           const result = await usersCollection.deleteOne({
-            _id: new ObjectId(userId),
+            _id: userToDelete._id, // Use found _id
           });
           if (result.deletedCount === 1) {
             res.send({ success: true, message: "User deleted successfully." });
@@ -334,7 +390,6 @@ async function run() {
       }
     );
 
-    // Pet data routes (Public)
     app.get("/pets", async (req, res) => {
       try {
         const result = await petsCollection.find().toArray();
@@ -345,17 +400,11 @@ async function run() {
       }
     });
 
-    // Get a single pet by ID (PUBLIC)
     app.get("/pets/:id", async (req, res) => {
       const petId = req.params.id;
 
-      if (!ObjectId.isValid(petId)) {
-        return res.status(400).send({ message: "Invalid pet ID format." });
-      }
-
       try {
-        const pet = await petsCollection.findOne({ _id: petId });
-
+        const pet = await findDocumentById(petsCollection, petId);
         if (!pet) {
           return res.status(404).send({ message: "Pet not found." });
         }
@@ -366,64 +415,96 @@ async function run() {
       }
     });
 
-    // Add a Pet (Protected - any logged-in user can add)
     app.post("/pets", verifyFBToken, attachUserRole, async (req, res) => {
-      const newPet = req.body;
-      const creatorId = req.decoded.uid;
+      const newPetData = req.body;
+      const creatorId = req.decoded.uid; // Firebase UID (string)
 
-      // Validate required fields - match frontend field names
       if (
-        !newPet.name ||
-        !newPet.image ||
-        !newPet.category ||
-        !newPet.petLocation ||
-        !newPet.breed ||
-        !newPet.description ||
+        !newPetData.name ||
+        !newPetData.image ||
+        !newPetData.category ||
+        !newPetData.petLocation ||
+        !newPetData.breed ||
+        !newPetData.description ||
         !creatorId
       ) {
         return res.status(400).send({
           message:
-            "Missing required pet fields: name, image, category, location, breed, description",
+            "Missing required pet fields: name, image, category, location, breed, description.",
         });
       }
 
       try {
         const petToInsert = {
-          name: newPet.name,
-          image: newPet.image,
-          category: newPet.category,
-          breed: newPet.breed,
-          description: newPet.description,
-          petLocation: newPet.petLocation,
-          age: newPet.age || "N/A", // Make age optional with default
-          createdByUserId: creatorId,
+          name: newPetData.name,
+          image: newPetData.image,
+          category: newPetData.category,
+          breed: newPetData.breed,
+          description: newPetData.description,
+          petLocation: newPetData.petLocation,
+          age: newPetData.age || "N/A",
+          createdByUserId: creatorId, // Store Firebase UID (string)
           createdAt: new Date(),
           adopted: false,
         };
 
-        const result = await petsCollection.insertOne(petToInsert);
+        let insertedId;
+
+        if (newPetData._id) {
+          if (typeof newPetData._id !== "string") {
+            return res
+              .status(400)
+              .send({ message: "Provided _id must be a string." });
+          }
+
+          const existingPet = await petsCollection.findOne({
+            _id: newPetData._id,
+          });
+          if (existingPet) {
+            return res
+              .status(409)
+              .send({
+                message: `A pet with ID '${newPetData._id}' already exists.`,
+              });
+          }
+
+          petToInsert._id = newPetData._id;
+          const result = await petsCollection.insertOne(petToInsert);
+          insertedId = result.insertedId;
+          console.log(`Inserted pet with custom string ID: ${insertedId}`);
+        } else {
+          const result = await petsCollection.insertOne(petToInsert);
+          insertedId = result.insertedId;
+          console.log(
+            `Inserted pet with auto-generated ObjectId: ${insertedId}`
+          );
+        }
+
         res.status(201).send({
           success: true,
           message: "Pet added successfully!",
-          insertedId: result.insertedId,
+          insertedId: insertedId,
         });
       } catch (error) {
+        if (error.code === 11000 && error.keyPattern && error.keyPattern._id) {
+          return res
+            .status(409)
+            .send({ message: "A pet with this ID already exists." });
+        }
         console.error("Error adding new pet:", error);
         res.status(500).send({ message: "Failed to add pet." });
       }
     });
 
-    // Get Pets added by a specific user (Protected - user can only view their own, admin can view all)
     app.get(
-      "/user-pets/:userId",
+      "/user-pets/:userId", // userId here is Firebase UID (string)
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
-        const requestedUserId = req.params.userId;
+        const requestedUserId = req.params.userId; // Firebase UID (string)
         const authUserId = req.decoded.uid; // User ID from the authenticated token
         const userRole = req.decoded.role;
 
-        // Allow if the requested ID matches the authenticated user's ID OR if the user is an admin
         if (requestedUserId !== authUserId && userRole !== "admin") {
           return res.status(403).send({
             message:
@@ -433,7 +514,7 @@ async function run() {
 
         try {
           const pets = await petsCollection
-            .find({ createdByUserId: requestedUserId })
+            .find({ createdByUserId: requestedUserId }) // Query by Firebase UID (string)
             .toArray();
           res.send(pets);
         } catch (error) {
@@ -443,25 +524,19 @@ async function run() {
       }
     );
 
-    // Delete a Pet (Protected - only by creator or admin)
     app.delete("/pets/:id", verifyFBToken, attachUserRole, async (req, res) => {
       const petId = req.params.id;
-      const authUserId = req.decoded.uid; // User ID from the authenticated token
-      const userRole = req.decoded.role;
-
-      if (!ObjectId.isValid(petId)) {
-        return res.status(400).send({ message: "Invalid pet ID format." });
-      }
 
       try {
-        const pet = await petsCollection.findOne({ _id: new ObjectId(petId) });
-
+        const pet = await findDocumentById(petsCollection, petId);
         if (!pet) {
           return res.status(404).send({ message: "Pet not found." });
         }
 
-        // Check if the user is the creator of the pet OR if the user is an admin
-        if (pet.createdByUserId !== authUserId && userRole !== "admin") {
+        if (
+          pet.createdByUserId !== req.decoded.uid &&
+          req.decoded.role !== "admin"
+        ) {
           return res.status(403).send({
             message:
               "Forbidden: You do not have permission to delete this pet.",
@@ -469,7 +544,7 @@ async function run() {
         }
 
         const result = await petsCollection.deleteOne({
-          _id: new ObjectId(petId),
+          _id: pet._id, // Use the found _id (ObjectId or string)
         });
         if (result.deletedCount === 1) {
           res.send({ success: true, message: "Pet deleted successfully." });
@@ -484,20 +559,14 @@ async function run() {
       }
     });
 
-    // Update Pet Adoption Status (Protected - only by creator or admin)
     app.patch(
       "/pets/status/:id",
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
         const petId = req.params.id;
-        const { adopted } = req.body; // Expecting { adopted: true/false }
-        const authUserId = req.decoded.uid;
-        const userRole = req.decoded.role;
+        const { adopted } = req.body;
 
-        if (!ObjectId.isValid(petId)) {
-          return res.status(400).send({ message: "Invalid pet ID format." });
-        }
         if (typeof adopted !== "boolean") {
           return res.status(400).send({
             message: "Invalid 'adopted' status. Must be true or false.",
@@ -505,16 +574,15 @@ async function run() {
         }
 
         try {
-          const pet = await petsCollection.findOne({
-            _id: new ObjectId(petId),
-          });
-
+          const pet = await findDocumentById(petsCollection, petId);
           if (!pet) {
             return res.status(404).send({ message: "Pet not found." });
           }
 
-          // Check if the user is the creator of the pet OR if the user is an admin
-          if (pet.createdByUserId !== authUserId && userRole !== "admin") {
+          if (
+            pet.createdByUserId !== req.decoded.uid &&
+            req.decoded.role !== "admin"
+          ) {
             return res.status(403).send({
               message:
                 "Forbidden: You do not have permission to update this pet status.",
@@ -522,7 +590,6 @@ async function run() {
           }
 
           if (pet.adopted === adopted) {
-            // No change needed
             return res.status(200).send({
               success: false,
               message: "Pet status is already as requested.",
@@ -530,7 +597,7 @@ async function run() {
           }
 
           const result = await petsCollection.updateOne(
-            { _id: new ObjectId(petId) },
+            { _id: pet._id }, // Use the found _id (ObjectId or string)
             { $set: { adopted: adopted } }
           );
 
@@ -550,57 +617,46 @@ async function run() {
       }
     );
 
-    // Update a Pet's details (Protected - only by creator or admin)
     app.patch("/pets/:id", verifyFBToken, attachUserRole, async (req, res) => {
       const petId = req.params.id;
       const updatedPetData = req.body;
-      const authUserId = req.decoded.uid;
-      const userRole = req.decoded.role;
-
-      if (!ObjectId.isValid(petId)) {
-        return res.status(400).send({ message: "Invalid pet ID format." });
-      }
 
       try {
-        const pet = await petsCollection.findOne({ _id: petId });
-
+        const pet = await findDocumentById(petsCollection, petId);
         if (!pet) {
           return res.status(404).send({ message: "Pet not found." });
         }
 
-        // Ensure the user is the creator of the pet OR an admin
-        if (pet.createdByUserId !== authUserId && userRole !== "admin") {
+        if (
+          pet.createdByUserId !== req.decoded.uid &&
+          req.decoded.role !== "admin"
+        ) {
           return res.status(403).send({
             message:
               "Forbidden: You do not have permission to update this pet.",
           });
         }
 
-        // Construct the update document with flexible key handling
         const updateDoc = {};
 
-        // Handle petName / name
         if (updatedPetData.petName !== undefined) {
           updateDoc.name = updatedPetData.petName;
         } else if (updatedPetData.name !== undefined) {
           updateDoc.name = updatedPetData.name;
         }
 
-        // Handle petImage / image
         if (updatedPetData.petImage !== undefined) {
           updateDoc.image = updatedPetData.petImage;
         } else if (updatedPetData.image !== undefined) {
           updateDoc.image = updatedPetData.image;
         }
 
-        // Handle petCategory / category
         if (updatedPetData.petCategory !== undefined) {
           updateDoc.category = updatedPetData.petCategory;
         } else if (updatedPetData.category !== undefined) {
           updateDoc.category = updatedPetData.category;
         }
 
-        // Handle petAge / age
         let ageValue;
         if (updatedPetData.petAge !== undefined) {
           ageValue = updatedPetData.petAge;
@@ -618,13 +674,11 @@ async function run() {
           updateDoc.age = parsedAge;
         }
 
-        // Handle other fields directly if they are present and not excluded
-        // Exclude _id, createdByUserId, createdAt, adopted, and potentially 'id' if it's coming from frontend
         const allowedFields = [
           "petLocation",
           "shortDescription",
           "longDescription",
-          // Add any other fields that can be directly updated without renaming
+          "breed",
         ];
 
         allowedFields.forEach((field) => {
@@ -633,7 +687,6 @@ async function run() {
           }
         });
 
-        // Ensure updateDoc is not empty before proceeding
         if (Object.keys(updateDoc).length === 0) {
           return res
             .status(400)
@@ -641,7 +694,7 @@ async function run() {
         }
 
         const result = await petsCollection.updateOne(
-          { _id: petId },
+          { _id: pet._id }, // Use the found _id (ObjectId or string)
           { $set: updateDoc }
         );
 
@@ -657,9 +710,7 @@ async function run() {
       }
     });
 
-    // Donation Campaign Public Routes
     app.get("/donation-cam", async (req, res) => {
-      // Fetches all campaigns
       try {
         const result = await donationCamCollection.find().toArray();
         res.send(result);
@@ -670,37 +721,38 @@ async function run() {
     });
 
     app.get("/donation-cam/:id", async (req, res) => {
-      // Fetches a single campaign by ID
       const campaignId = req.params.id;
 
-      if (!ObjectId.isValid(campaignId)) {
-        return res.status(400).send({ message: "Invalid campaign ID format." });
-      }
-
       try {
-        const result = await donationCamCollection.findOne({
-          _id: new ObjectId(campaignId),
-        });
-        if (result) {
-          res.send(result);
-        } else {
-          res.status(404).send({ message: "Donation campaign not found." });
+        const campaign = await findDocumentById(
+          donationCamCollection,
+          campaignId
+        );
+        if (!campaign) {
+          return res
+            .status(404)
+            .send({ message: "Donation campaign not found." });
         }
+        res.send(campaign);
       } catch (error) {
         console.error("Error fetching single donation campaign:", error);
         res.status(500).send({ message: "Internal server error." });
       }
     });
 
-    // Get recommended donation campaigns (Public)
     app.get("/recommended-campaigns/:excludeId", async (req, res) => {
       const excludeId = req.params.excludeId;
       const limit = parseInt(req.query.limit) || 3;
 
       try {
         let query = {};
-        if (ObjectId.isValid(excludeId)) {
-          query = { _id: { $ne: new ObjectId(excludeId) } };
+        // Use findDocumentById to get the correct _id type for exclusion
+        const excludeCampaign = await findDocumentById(
+          donationCamCollection,
+          excludeId
+        );
+        if (excludeCampaign) {
+          query = { _id: { $ne: excludeCampaign._id } };
         }
 
         const recommended = await donationCamCollection
@@ -714,21 +766,19 @@ async function run() {
       }
     });
 
-    // Create Donation Campaign (Protected - any logged-in user)
     app.post(
       "/donation-cam",
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
         const newCampaign = req.body;
-        const creatorId = req.decoded.uid; // Get creator's UID from verified token
+        const creatorId = req.decoded.uid;
 
-        // Basic validation (add more as needed)
         if (
           !newCampaign.petName ||
           !newCampaign.targetAmount ||
           !newCampaign.category ||
-          !newCampaign.endDate || // Ensure endDate is provided
+          !newCampaign.endDate ||
           !creatorId
         ) {
           return res
@@ -744,10 +794,8 @@ async function run() {
             .send({ message: "Target amount must be a positive number." });
         }
 
-        // Validate endDate
         const endDate = new Date(newCampaign.endDate);
         if (isNaN(endDate.getTime())) {
-          // Check for invalid date
           return res.status(400).send({ message: "Invalid endDate format." });
         }
         if (endDate < new Date()) {
@@ -759,10 +807,10 @@ async function run() {
         try {
           const campaignToInsert = {
             ...newCampaign,
-            createdByUserId: creatorId, // Store the Firebase UID of the creator
-            createdAt: new Date(), // Store creation date as a Date object
-            donatedAmount: 0, // Ensure initial donated amount is 0
-            donorCount: 0, // Ensure initial donor count is 0
+            createdByUserId: creatorId,
+            createdAt: new Date(),
+            donatedAmount: 0,
+            donorCount: 0,
           };
 
           const result = await donationCamCollection.insertOne(
@@ -782,7 +830,6 @@ async function run() {
       }
     );
 
-    // Update Donation Campaign (Protected - only by creator or admin)
     app.patch(
       "/donation-cam/:id",
       verifyFBToken,
@@ -790,35 +837,28 @@ async function run() {
       async (req, res) => {
         const campaignId = req.params.id;
         const updatedCampaignData = req.body;
-        const authUserId = req.decoded.uid;
-        const userRole = req.decoded.role;
-
-        if (!ObjectId.isValid(campaignId)) {
-          return res
-            .status(400)
-            .send({ message: "Invalid campaign ID format." });
-        }
 
         try {
-          const campaign = await donationCamCollection.findOne({
-            _id: new ObjectId(campaignId),
-          });
-
+          const campaign = await findDocumentById(
+            donationCamCollection,
+            campaignId
+          );
           if (!campaign) {
             return res
               .status(404)
               .send({ message: "Donation campaign not found." });
           }
 
-          // Ensure the user is the creator of the campaign OR an admin
-          if (campaign.createdByUserId !== authUserId && userRole !== "admin") {
+          if (
+            campaign.createdByUserId !== req.decoded.uid &&
+            req.decoded.role !== "admin"
+          ) {
             return res.status(403).send({
               message:
                 "Forbidden: You do not have permission to update this campaign.",
             });
           }
 
-          // Prepare update document, exclude _id, createdByUserId, createdAt, donatedAmount, donorCount
           const {
             _id,
             createdByUserId,
@@ -828,7 +868,6 @@ async function run() {
             ...dataToUpdate
           } = updatedCampaignData;
 
-          // Basic validation for updated fields (e.g., targetAmount)
           if (dataToUpdate.targetAmount !== undefined) {
             dataToUpdate.targetAmount = parseFloat(dataToUpdate.targetAmount);
             if (
@@ -848,9 +887,7 @@ async function run() {
                 .send({ message: "Invalid endDate format." });
             }
             if (endDate < new Date()) {
-              // Allow updating to a past date only if the campaign is already ended
               if (campaign.donatedAmount < campaign.targetAmount) {
-                // If not fully funded
                 return res.status(400).send({
                   message:
                     "Cannot set end date to past if campaign is not fully funded.",
@@ -859,8 +896,14 @@ async function run() {
             }
           }
 
+          if (Object.keys(dataToUpdate).length === 0) {
+            return res
+              .status(400)
+              .send({ message: "No valid fields provided for update." });
+          }
+
           const result = await donationCamCollection.updateOne(
-            { _id: new ObjectId(campaignId) },
+            { _id: campaign._id }, // Use the found _id (ObjectId or string)
             { $set: dataToUpdate }
           );
 
@@ -882,55 +925,55 @@ async function run() {
       }
     );
 
-    // Pause/Unpause Donation Campaign (Admin or Creator)
     app.patch(
       "/donation-cam/status/:id",
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
         const campaignId = req.params.id;
-        const { paused } = req.body; // Expecting { paused: true/false }
-        const authUserId = req.decoded.uid;
-        const userRole = req.decoded.role;
-
-        if (!ObjectId.isValid(campaignId)) {
-          return res
-            .status(400)
-            .send({ message: "Invalid campaign ID format." });
-        }
-        if (typeof paused !== "boolean") {
-          return res.status(400).send({
-            message: "Invalid 'paused' status. Must be true or false.",
-          });
-        }
+        const { paused } = req.body;
 
         try {
-          const campaign = await donationCamCollection.findOne({
-            _id: new ObjectId(campaignId),
-          });
-
+          const campaign = await findDocumentById(
+            donationCamCollection,
+            campaignId
+          );
           if (!campaign) {
             return res
               .status(404)
               .send({ message: "Donation campaign not found." });
           }
 
-          if (campaign.createdByUserId !== authUserId && userRole !== "admin") {
+          if (
+            campaign.createdByUserId !== req.decoded.uid &&
+            req.decoded.role !== "admin"
+          ) {
             return res.status(403).send({
               message:
                 "Forbidden: You do not have permission to change this campaign's status.",
             });
           }
 
+          if (campaign.paused === paused) {
+            return res
+              .status(200)
+              .send({
+                success: false,
+                message: "Campaign status is already as requested.",
+              });
+          }
+
           const result = await donationCamCollection.updateOne(
-            { _id: new ObjectId(campaignId) },
+            { _id: campaign._id }, // Use the found _id (ObjectId or string)
             { $set: { paused: paused } }
           );
 
           if (result.matchedCount === 0) {
-            return res.status(404).send({
-              message: "Campaign not found or status already updated.",
-            });
+            return res
+              .status(404)
+              .send({
+                message: "Campaign not found or status already updated.",
+              });
           }
           res.send({
             success: true,
@@ -945,34 +988,28 @@ async function run() {
       }
     );
 
-    // Delete Donation Campaign (Admin or Creator) - COMPLETED
     app.delete(
       "/donation-cam/:id",
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
         const campaignId = req.params.id;
-        const authUserId = req.decoded.uid;
-        const userRole = req.decoded.role;
-
-        if (!ObjectId.isValid(campaignId)) {
-          return res
-            .status(400)
-            .send({ message: "Invalid campaign ID format." });
-        }
 
         try {
-          const campaign = await donationCamCollection.findOne({
-            _id: new ObjectId(campaignId),
-          });
-
+          const campaign = await findDocumentById(
+            donationCamCollection,
+            campaignId
+          );
           if (!campaign) {
             return res
               .status(404)
               .send({ message: "Donation campaign not found." });
           }
 
-          if (campaign.createdByUserId !== authUserId && userRole !== "admin") {
+          if (
+            campaign.createdByUserId !== req.decoded.uid &&
+            req.decoded.role !== "admin"
+          ) {
             return res.status(403).send({
               message:
                 "Forbidden: You do not have permission to delete this campaign.",
@@ -980,362 +1017,33 @@ async function run() {
           }
 
           const result = await donationCamCollection.deleteOne({
-            _id: new ObjectId(campaignId),
+            _id: campaign._id, // Use the found _id (ObjectId or string)
           });
+
           if (result.deletedCount === 1) {
             res.send({
               success: true,
-              message: "Donation campaign deleted successfully.",
+              message: "Campaign deleted successfully.",
             });
           } else {
-            res.status(404).send({
-              message: "Donation campaign not found or already deleted.",
-            });
+            res
+              .status(404)
+              .send({ message: "Campaign not found or already deleted." });
           }
         } catch (error) {
           console.error("Error deleting campaign:", error);
-          res.status(500).send({ message: "Failed to delete campaign." }); // Added missing error response
+          res.status(500).send({ message: "Failed to delete campaign." });
         }
       }
     );
 
-    // Get My Created Donation Campaigns (Protected - by creator)
-    app.get(
-      "/my-donation-campaigns/:userId",
-      verifyFBToken,
-      attachUserRole,
-      async (req, res) => {
-        const requestedUserId = req.params.userId;
-        const authUserId = req.decoded.uid;
-
-        if (requestedUserId !== authUserId && req.decoded.role !== "admin") {
-          return res.status(403).send({
-            message:
-              "Forbidden: You can only view your own campaigns unless you are an admin.",
-          });
-        }
-        try {
-          const campaigns = await donationCamCollection
-            .find({ createdByUserId: requestedUserId })
-            .toArray();
-          res.send(campaigns);
-        } catch (error) {
-          console.error("Error fetching user's donation campaigns:", error);
-          res.status(500).send({ message: "Failed to retrieve campaigns." });
-        }
-      }
-    );
-
-    // Get All Donations (Admin only)
-    app.get(
-      "/all-donations",
-      verifyFBToken,
-      attachUserRole,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const donations = await donationsCollection.find().toArray();
-          console.log(donations);
-          res.send(donations);
-        } catch (error) {
-          console.error("Error fetching all donations:", error);
-          res.status(500).send({ message: "Failed to retrieve donations." });
-        }
-      }
-    );
-
-    // Wanted Pets Public Route
-    app.get("/wanted-pets", async (req, res) => {
-      try {
-        const result = await wantedPetsCollection
-          .find({ status: "Active" })
-          .toArray(); // Only fetch active requests
-        res.send(result);
-      } catch (error) {
-        console.error("Error fetching wanted pets:", error);
-        res.status(500).send({ message: "Internal server error." });
-      }
-    });
-
-    // Adoption Request API Endpoints
-
-    // Submit an Adoption Request (Protected - by any logged-in user)
-    // Your backend code for /adoption-requests (already correct)
-    app.post(
-      "/adoption-requests",
-      verifyFBToken,
-      attachUserRole,
-      async (req, res) => {
-        const requestData = req.body;
-        const requesterId = req.decoded.uid;
-
-        // Basic validation: petId, requesterName, requesterEmail, requesterPhone, requesterLocation are required from frontend
-        if (
-          !requestData.petId ||
-          !requestData.requesterName ||
-          !requestData.requesterEmail ||
-          !requestData.requesterPhone ||
-          !requestData.requesterLocation
-        ) {
-          return res.status(400).send({
-            message:
-              "Missing required fields for adoption request (petId, requesterName, requesterEmail, requesterPhone, requesterLocation).",
-          });
-        }
-
-        try {
-          // Fetch pet details from the database to ensure data integrity and get ownerId
-          const pet = await petsCollection.findOne({
-            _id: requestData.petId, // THIS IS CORRECT!
-          });
-
-          if (!pet) {
-            return res.status(404).send({ message: "Pet not found." });
-          }
-          if (pet.adopted) {
-            return res
-              .status(400)
-              .send({ message: "This pet has already been adopted." });
-          }
-
-          // Prevent a user from requesting their own pet
-          if (pet.createdByUserId && pet.createdByUserId === requesterId) {
-            return res
-              .status(400)
-              .send({ message: "You cannot request to adopt your own pet." });
-          }
-
-          // Check if this user has already requested this pet
-          const existingRequest = await adoptionRequestsCollection.findOne({
-            petId: requestData.petId,
-            requesterId: requesterId,
-            status: { $in: ["pending", "accepted"] }, // Check for pending or already accepted requests
-          });
-
-          if (existingRequest) {
-            return res.status(400).send({
-              message:
-                "You have already submitted an adoption request for this pet.",
-            });
-          }
-
-          const requestToInsert = {
-            petId: requestData.petId,
-            petName: pet.name, // Derived from fetched pet
-            petImage: pet.image, // Derived from fetched pet
-            ownerId: pet.createdByUserId, // Derived from fetched pet
-            requesterId: requesterId, // The ID of the user making the request
-            requesterName: requestData.requesterName,
-            requesterEmail: requestData.requesterEmail,
-            requesterPhone: requestData.requesterPhone,
-            requesterLocation: requestData.requesterLocation,
-            requesterMessage: requestData.requesterMessage, // Make sure message is included
-            requestDate: new Date(), // Store request date
-            status: "pending", // Default status
-          };
-
-          const result = await adoptionRequestsCollection.insertOne(
-            requestToInsert
-          );
-          res.status(201).send({
-            success: true,
-            message: "Adoption request submitted successfully!",
-            insertedId: result.insertedId,
-          });
-        } catch (error) {
-          console.error("Error submitting adoption request:", error);
-          res
-            .status(500)
-            .send({ message: "Failed to submit adoption request." });
-        }
-      }
-    );
-
-    // Get Adoption Requests for Pets Owned by Current User (Protected)
-// ... (inside the run() function in index.js)
-
-// Get Adoption Requests for Pets Owned by Current User (Protected)
-app.get(
-  "/owner-adoption-requests/:ownerId",
-  verifyFBToken,
-  attachUserRole,
-  async (req, res) => {
-    const requestedOwnerId = req.params.ownerId; // This is a Firebase UID string
-    const authUserId = req.decoded.uid; // User ID from the authenticated token
-    const userRole = req.decoded.role; // Get role from decoded token
-
-    // Ensure the requested owner ID matches the authenticated user's ID
-    // Or if an admin is requesting
-    if (requestedOwnerId !== authUserId && userRole !== "admin") {
-      return res.status(403).send({
-        message:
-          "Forbidden: You can only view requests for your own pets unless you are an admin.",
-      });
-    }
-
-    try {
-      // 1. Find all pets owned by this user (where createdByUserId is the Firebase UID string)
-      // No ObjectId conversion for requestedOwnerId here, as createdByUserId is a string
-      const ownedPets = await petsCollection
-        .find({ createdByUserId:requestedOwnerId })
-        .toArray();
-
-      // 2. Get the MongoDB _id strings of these owned pets
-      const ownedPetMongoIds = ownedPets.map((pet) => pet._id.toString());
-
-      // 3. Find adoption requests where petId (which is stored as a string) is in the list of ownedPetMongoIds
-      const requests = await adoptionRequestsCollection
-        .find({
-          petId: { $in: ownedPetMongoIds }, // petId in adoptionRequests is stored as string
-        })
-        .toArray();
-
-      res.send(requests);
-    } catch (error) {
-      console.error("Error fetching owner's adoption requests:", error);
-      res
-        .status(500)
-        .send({ message: "Failed to retrieve adoption requests." });
-    }
-  }
-);
-
-// ... rest of your backend code
-
-
-    // NEW: Get All Adoption Requests (Admin & Volunteer Only)
-    app.get(
-      "/all-adoption-requests",
-      verifyFBToken,
-      attachUserRole,
-      verifyVolunteer || verifyAdmin, // Allows both volunteer and admin
-      async (req, res) => {
-        try {
-          const requests = await adoptionRequestsCollection.find().toArray();
-          res.send(requests);
-        } catch (error) {
-          console.error("Error fetching all adoption requests:", error);
-          res
-            .status(500)
-            .send({ message: "Failed to retrieve all adoption requests." });
-        }
-      }
-    );
-
-    // Update Adoption Request Status (Accept/Reject) (Protected - by owner, admin, or volunteer)
-    app.patch(
-      "/adoption-requests/status/:id",
-      verifyFBToken,
-      attachUserRole,
-      async (req, res) => {
-        const requestId = req.params.id;
-        const { status } = req.body; // Expecting { status: 'accepted' | 'rejected' }
-        const authUserId = req.decoded.uid;
-        const userRole = req.decoded.role;
-
-        if (!ObjectId.isValid(requestId)) {
-          return res
-            .status(400)
-            .send({ message: "Invalid request ID format." });
-        }
-        if (!["accepted", "rejected"].includes(status)) {
-          return res.status(400).send({
-            message: "Invalid status. Must be 'accepted' or 'rejected'.",
-          });
-        }
-
-        try {
-          const request = await adoptionRequestsCollection.findOne({
-            _id: new ObjectId(requestId),
-          });
-
-          if (!request) {
-            return res
-              .status(404)
-              .send({ message: "Adoption request not found." });
-          }
-
-          // Verify ownership/permission: Check if the user is the owner of the pet associated with the request
-          // OR if the user is an admin OR a volunteer.
-          const pet = await petsCollection.findOne({
-            _id: new ObjectId(request.petId),
-          });
-
-          if (!pet) {
-            // If the associated pet is not found, we cannot verify ownership.
-            // This might indicate a data inconsistency, but we should still allow admins/volunteers to manage.
-            if (userRole !== "admin" && userRole !== "volunteer") {
-              return res.status(403).send({
-                message:
-                  "Forbidden: Associated pet not found and you are not an admin/volunteer.",
-              });
-            }
-          } else {
-            // If pet is found, check if the current user is the pet owner, admin, or volunteer
-            if (
-              pet.createdByUserId !== authUserId &&
-              userRole !== "admin" &&
-              userRole !== "volunteer"
-            ) {
-              return res.status(403).send({
-                message:
-                  "Forbidden: You do not have permission to update this request.",
-              });
-            }
-          }
-
-          // Only allow status change from 'pending'
-          if (request.status !== "pending") {
-            return res.status(400).send({
-              message: `Request is already ${request.status}. Cannot change.`,
-            });
-          }
-
-          const updateResult = await adoptionRequestsCollection.updateOne(
-            { _id: new ObjectId(requestId) },
-            { $set: { status: status } }
-          );
-
-          if (updateResult.matchedCount === 0) {
-            return res.status(404).send({
-              message: "Request not found or status already updated.",
-            });
-          }
-
-          // If accepted, also mark the pet as adopted
-          if (status === "accepted") {
-            const petUpdateResult = await petsCollection.updateOne(
-              { _id: new ObjectId(request.petId) },
-              { $set: { adopted: true } }
-            );
-            if (petUpdateResult.matchedCount === 0) {
-              console.warn(
-                `Pet ${request.petId} not found when trying to mark as adopted after request acceptance.`
-              );
-            }
-          }
-
-          res.send({
-            success: true,
-            message: `Adoption request status updated to '${status}'.`,
-          });
-        } catch (error) {
-          console.error("Error updating adoption request status:", error);
-          res
-            .status(500)
-            .send({ message: "Failed to update adoption request status." });
-        }
-      }
-    );
-
-    // Create Stripe Payment Intent (Protected - any logged-in user)
     app.post(
       "/create-payment-intent",
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
         const { amount, campaignId } = req.body;
-        const authenticatedUserId = req.decoded.uid; // Get UID from verified Firebase token
+        const authenticatedUserId = req.decoded.uid;
 
         if (!amount || amount <= 0 || !campaignId || !authenticatedUserId) {
           return res.status(400).send({
@@ -1343,7 +1051,6 @@ app.get(
               "Amount, campaign ID, and authenticated user ID are required.",
           });
         }
-        // Amount must be in cents and integer
         const amountInCents = Math.round(amount * 100);
         if (isNaN(amountInCents) || amountInCents <= 0) {
           return res.status(400).send({ message: "Invalid amount provided." });
@@ -1351,9 +1058,9 @@ app.get(
 
         try {
           const paymentIntent = await stripe.paymentIntents.create({
-            amount: amountInCents, // amount in cents
+            amount: amountInCents,
             currency: "usd",
-            payment_method_types: ["card"], // Explicitly define payment method types
+            payment_method_types: ["card"],
             metadata: {
               campaignId: campaignId,
               userId: authenticatedUserId,
@@ -1370,17 +1077,14 @@ app.get(
       }
     );
 
-    // Record Donation after successful payment (Protected - any logged-in user)
     app.post(
       "/record-donation",
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
         const { campaignId, amount, paymentIntentId } = req.body;
-
-        // Get donor details from the verified Firebase token
         const authenticatedDonorId = req.decoded.uid;
-        const authenticatedDonorName = req.decoded.name || req.decoded.email; // Use name if available, else email
+        const authenticatedDonorName = req.decoded.name || req.decoded.email;
         const authenticatedDonorEmail = req.decoded.email;
 
         if (
@@ -1396,8 +1100,18 @@ app.get(
         }
 
         try {
+          const campaign = await findDocumentById(
+            donationCamCollection,
+            campaignId
+          );
+          if (!campaign) {
+            return res
+              .status(404)
+              .send({ message: "Donation campaign not found." });
+          }
+
           const updateResult = await donationCamCollection.updateOne(
-            { _id: new ObjectId(campaignId) },
+            { _id: campaign._id }, // Use the found _id (ObjectId or string)
             {
               $inc: { donatedAmount: amount, donorCount: 1 },
             }
@@ -1411,7 +1125,7 @@ app.get(
           }
 
           const donationRecord = {
-            campaignId: new ObjectId(campaignId),
+            campaignId: campaign._id, // Use the found _id (ObjectId or string)
             amount: amount,
             donorId: authenticatedDonorId,
             donorName: authenticatedDonorName,
@@ -1435,13 +1149,12 @@ app.get(
       }
     );
 
-    // Get My Donations (Protected - user can only view their own)
     app.get(
-      "/my-donations/:userId",
+      "/my-donations/:userId", // userId here is Firebase UID (string)
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
-        const requestedUserId = req.params.userId;
+        const requestedUserId = req.params.userId; // Firebase UID (string)
         const authUserId = req.decoded.uid;
 
         if (requestedUserId !== authUserId && req.decoded.role !== "admin") {
@@ -1452,7 +1165,7 @@ app.get(
         }
         try {
           const donations = await donationsCollection
-            .find({ donorId: requestedUserId })
+            .find({ donorId: requestedUserId }) // Query by Firebase UID (string)
             .toArray();
           res.send(donations);
         } catch (error) {
@@ -1462,15 +1175,49 @@ app.get(
       }
     );
 
-    // Add this with your other collection declarations
-    let tasksCollection;
+    app.get(
+      "/all-donations",
+      verifyFBToken,
+      attachUserRole,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const donations = await donationsCollection.find().toArray();
+          console.log(donations);
+          res.send(donations);
+        } catch (error) {
+          console.error("Error fetching all donations:", error);
+          res.status(500).send({ message: "Failed to retrieve donations." });
+        }
+      }
+    );
 
-    // Inside the run() function, after connecting to MongoDB:
-    tasksCollection = db.collection("tasks");
+    app.get(
+      "/my-donation-campaigns/:userId", // userId here is Firebase UID (string)
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const requestedUserId = req.params.userId; // Firebase UID (string)
+        const authUserId = req.decoded.uid;
 
-    // ====================== VOLUNTEER TASK ROUTES ====================== //
+        if (requestedUserId !== authUserId && req.decoded.role !== "admin") {
+          return res.status(403).send({
+            message:
+              "Forbidden: You can only view your own campaigns unless you are an admin.",
+          });
+        }
+        try {
+          const campaigns = await donationCamCollection
+            .find({ createdByUserId: requestedUserId }) // Query by Firebase UID (string)
+            .toArray();
+          res.send(campaigns);
+        } catch (error) {
+          console.error("Error fetching user's donation campaigns:", error);
+          res.status(500).send({ message: "Failed to retrieve campaigns." });
+        }
+      }
+    );
 
-    // Create a new task (Admin or Volunteer can create tasks)
     app.post(
       "/tasks",
       verifyFBToken,
@@ -1478,9 +1225,8 @@ app.get(
       verifyVolunteer,
       async (req, res) => {
         const { title, description, priority, dueDate, assignedTo } = req.body;
-        const assignedBy = req.decoded.uid;
+        const assignedBy = req.decoded.uid; // Firebase UID (string)
 
-        // Basic validation
         if (!title || !description || !priority || !assignedTo) {
           return res
             .status(400)
@@ -1488,9 +1234,9 @@ app.get(
         }
 
         try {
-          // Check if assignedTo user exists and is a volunteer
+          // Check if assignedTo user exists and is a volunteer (query by UID)
           const userExists = await usersCollection.findOne({
-            _id: new ObjectId(assignedTo),
+            uid: assignedTo, // Query by Firebase UID (string)
             role: "volunteer",
           });
 
@@ -1504,8 +1250,8 @@ app.get(
             status: "pending",
             priority,
             dueDate: dueDate ? new Date(dueDate) : null,
-            assignedTo: new ObjectId(assignedTo),
-            assignedBy: new ObjectId(assignedBy),
+            assignedTo: assignedTo, // Store Firebase UID (string)
+            assignedBy: assignedBy, // Store Firebase UID (string)
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -1523,7 +1269,6 @@ app.get(
       }
     );
 
-    // Get all tasks (Admin or Volunteer can view all tasks)
     app.get(
       "/tasks",
       verifyFBToken,
@@ -1536,24 +1281,30 @@ app.get(
               {
                 $lookup: {
                   from: "users",
-                  localField: "assignedTo",
-                  foreignField: "_id",
-                  as: "assignedTo",
+                  localField: "assignedTo", // This is Firebase UID (string)
+                  foreignField: "uid", // Link to 'uid' field in users collection
+                  as: "assignedToUser",
                 },
               },
               {
                 $lookup: {
                   from: "users",
-                  localField: "assignedBy",
-                  foreignField: "_id",
-                  as: "assignedBy",
+                  localField: "assignedBy", // This is Firebase UID (string)
+                  foreignField: "uid", // Link to 'uid' field in users collection
+                  as: "assignedByUser",
                 },
               },
               {
-                $unwind: "$assignedTo",
+                $unwind: {
+                  path: "$assignedToUser",
+                  preserveNullAndEmptyArrays: true,
+                }, // Preserve tasks even if user not found
               },
               {
-                $unwind: "$assignedBy",
+                $unwind: {
+                  path: "$assignedByUser",
+                  preserveNullAndEmptyArrays: true,
+                }, // Preserve tasks even if user not found
               },
               {
                 $sort: { createdAt: -1 },
@@ -1569,24 +1320,26 @@ app.get(
       }
     );
 
-    // Get tasks assigned to current user
     app.get("/my-tasks", verifyFBToken, attachUserRole, async (req, res) => {
       try {
         const tasks = await tasksCollection
           .aggregate([
             {
-              $match: { assignedTo: new ObjectId(req.decoded.uid) },
+              $match: { assignedTo: req.decoded.uid }, // Match by Firebase UID (string)
             },
             {
               $lookup: {
                 from: "users",
-                localField: "assignedBy",
-                foreignField: "_id",
-                as: "assignedBy",
+                localField: "assignedBy", // This is Firebase UID (string)
+                foreignField: "uid", // Link to 'uid' field in users collection
+                as: "assignedByUser",
               },
             },
             {
-              $unwind: "$assignedBy",
+              $unwind: {
+                path: "$assignedByUser",
+                preserveNullAndEmptyArrays: true,
+              }, // Preserve tasks even if user not found
             },
             {
               $sort: { createdAt: -1 },
@@ -1601,7 +1354,6 @@ app.get(
       }
     });
 
-    // Update task status (Assigned volunteer can update their own tasks)
     app.patch(
       "/tasks/:id/status",
       verifyFBToken,
@@ -1609,39 +1361,34 @@ app.get(
       async (req, res) => {
         const taskId = req.params.id;
         const { status } = req.body;
-        const userId = req.decoded.uid;
-
-        if (!ObjectId.isValid(taskId)) {
-          return res.status(400).send({ message: "Invalid task ID" });
-        }
+        const userId = req.decoded.uid; // Firebase UID (string)
 
         if (!["pending", "in-progress", "completed"].includes(status)) {
           return res.status(400).send({ message: "Invalid status" });
         }
 
         try {
-          const task = await tasksCollection.findOne({
-            _id: new ObjectId(taskId),
-          });
-
+          const task = await findDocumentById(tasksCollection, taskId);
           if (!task) {
             return res.status(404).send({ message: "Task not found" });
           }
 
-          // Check if user is assigned to the task
-          if (task.assignedTo.toString() !== userId) {
+          if (task.assignedTo !== userId) {
+            // Compare Firebase UID strings
             return res
               .status(403)
               .send({ message: "Not authorized to update this task" });
           }
 
           const result = await tasksCollection.updateOne(
-            { _id: new ObjectId(taskId) },
+            { _id: task._id }, // Use the found _id (ObjectId or string)
             { $set: { status, updatedAt: new Date() } }
           );
 
           if (result.matchedCount === 0) {
-            return res.status(404).send({ message: "Task not found" });
+            return res
+              .status(404)
+              .send({ message: "Task not found or status already updated." });
           }
 
           res.send({ success: true, message: "Task status updated" });
@@ -1652,7 +1399,6 @@ app.get(
       }
     );
 
-    // Update task details (Only admin or the assigned volunteer can update)
     app.patch(
       "/tasks/:id",
       verifyFBToken,
@@ -1661,24 +1407,16 @@ app.get(
       async (req, res) => {
         const taskId = req.params.id;
         const { title, description, priority, dueDate, assignedTo } = req.body;
-        const userId = req.decoded.uid;
-
-        if (!ObjectId.isValid(taskId)) {
-          return res.status(400).send({ message: "Invalid task ID" });
-        }
+        const userId = req.decoded.uid; // Firebase UID (string)
 
         try {
-          // Verify the task exists
-          const existingTask = await tasksCollection.findOne({
-            _id: new ObjectId(taskId),
-          });
+          const existingTask = await findDocumentById(tasksCollection, taskId);
           if (!existingTask) {
             return res.status(404).send({ message: "Task not found" });
           }
 
-          // Check if user is admin or the original assigner
           if (
-            existingTask.assignedBy.toString() !== userId &&
+            existingTask.assignedBy !== userId && // Compare Firebase UID strings
             req.decoded.role !== "admin"
           ) {
             return res
@@ -1693,24 +1431,25 @@ app.get(
           if (dueDate) updateFields.dueDate = new Date(dueDate);
 
           if (assignedTo) {
-            // Verify the new assigned user exists and is a volunteer
             const userExists = await usersCollection.findOne({
-              _id: new ObjectId(assignedTo),
+              uid: assignedTo, // Query by Firebase UID (string)
               role: "volunteer",
             });
             if (!userExists) {
               return res.status(404).send({ message: "Volunteer not found" });
             }
-            updateFields.assignedTo = new ObjectId(assignedTo);
+            updateFields.assignedTo = assignedTo; // Store Firebase UID (string)
           }
 
           const result = await tasksCollection.updateOne(
-            { _id: new ObjectId(taskId) },
+            { _id: existingTask._id }, // Use the found _id (ObjectId or string)
             { $set: updateFields }
           );
 
           if (result.matchedCount === 0) {
-            return res.status(404).send({ message: "Task not found" });
+            return res
+              .status(404)
+              .send({ message: "Task not found or no changes made." });
           }
 
           res.send({ success: true, message: "Task updated successfully" });
@@ -1721,7 +1460,6 @@ app.get(
       }
     );
 
-    // Delete task (Only admin or the assigned volunteer can delete)
     app.delete(
       "/tasks/:id",
       verifyFBToken,
@@ -1729,24 +1467,16 @@ app.get(
       verifyVolunteer,
       async (req, res) => {
         const taskId = req.params.id;
-        const userId = req.decoded.uid;
-
-        if (!ObjectId.isValid(taskId)) {
-          return res.status(400).send({ message: "Invalid task ID" });
-        }
+        const userId = req.decoded.uid; // Firebase UID (string)
 
         try {
-          // Verify the task exists
-          const existingTask = await tasksCollection.findOne({
-            _id: new ObjectId(taskId),
-          });
+          const existingTask = await findDocumentById(tasksCollection, taskId);
           if (!existingTask) {
             return res.status(404).send({ message: "Task not found" });
           }
 
-          // Check if user is admin or the original assigner
           if (
-            existingTask.assignedBy.toString() !== userId &&
+            existingTask.assignedBy !== userId && // Compare Firebase UID strings
             req.decoded.role !== "admin"
           ) {
             return res
@@ -1755,11 +1485,13 @@ app.get(
           }
 
           const result = await tasksCollection.deleteOne({
-            _id: new ObjectId(taskId),
+            _id: existingTask._id, // Use the found _id (ObjectId or string)
           });
 
           if (result.deletedCount === 0) {
-            return res.status(404).send({ message: "Task not found" });
+            return res
+              .status(404)
+              .send({ message: "Task not found or already deleted." });
           }
 
           res.send({ success: true, message: "Task deleted successfully" });
@@ -1770,7 +1502,6 @@ app.get(
       }
     );
 
-    // Get task statistics (Admin or Volunteer can view)
     app.get(
       "/task-stats",
       verifyFBToken,
@@ -1804,23 +1535,332 @@ app.get(
       }
     );
 
-    // Get tasks by volunteer ID (Admin or Volunteer can view)
     app.get(
-      "/volunteer-tasks/:volunteerId",
+      "/all-adoption-requests",
+      verifyFBToken,
+      attachUserRole,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const requests = await adoptionRequestsCollection
+            .aggregate([
+              {
+                $lookup: {
+                  from: "pets",
+                  localField: "petId", // Can be ObjectId or string
+                  foreignField: "_id", // Can be ObjectId or string
+                  as: "petDetails",
+                },
+              },
+              {
+                $unwind: {
+                  path: "$petDetails",
+                  preserveNullAndEmptyArrays: true,
+                }, // Preserve requests if pet not found
+              },
+              {
+                $sort: { requestDate: -1 },
+              },
+            ])
+            .toArray();
+
+          res.send(requests);
+        } catch (error) {
+          console.error("Error fetching all adoption requests:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to retrieve all adoption requests." });
+        }
+      }
+    );
+
+    app.get(
+      "/owner-adoption-requests/:ownerId", // ownerId is Firebase UID (string)
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const requestedOwnerId = req.params.ownerId; // Firebase UID (string)
+        const authUserId = req.decoded.uid;
+        const userRole = req.decoded.role;
+
+        if (requestedOwnerId !== authUserId && userRole !== "admin") {
+          return res.status(403).send({
+            message:
+              "Forbidden: You can only view requests for your own pets unless you are an admin.",
+          });
+        }
+
+        try {
+          // Find all pets owned by this user (createdByUserId is Firebase UID string)
+          const ownedPets = await petsCollection
+            .find({
+              createdByUserId: requestedOwnerId,
+            })
+            .toArray();
+
+          if (ownedPets.length === 0) {
+            return res.status(200).send([]);
+          }
+
+          // Get the actual _id values (ObjectId objects or strings) of these owned pets
+          const ownedPetIds = ownedPets.map((pet) => pet._id);
+
+          // Find adoption requests where petId matches these _id values
+          const requests = await adoptionRequestsCollection
+            .find({
+              petId: { $in: ownedPetIds }, // Use actual _id types for $in query
+            })
+            .toArray();
+
+          res.send(requests);
+        } catch (error) {
+          console.error("Error fetching owner's adoption requests:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to retrieve adoption requests." });
+        }
+      }
+    );
+    app.post(
+      "/adoption-requests",
+      verifyFBToken, // Authenticates the user and attaches decoded token to req.decoded
+      attachUserRole, // Attaches the user's role (e.g., 'user', 'owner')
+      async (req, res) => {
+        // Extract request data from the request body sent by the client
+        const requestData = req.body;
+        // Get the requester's user ID from the decoded Firebase token (set by verifyFBToken)
+        const requesterId = req.decoded.uid; // <--- This is where the frontend's user.uid is received
+
+        // Basic server-side validation for required fields
+        if (
+          !requestData.petId ||
+          !requestData.requesterName ||
+          !requestData.requesterEmail ||
+          !requestData.requesterPhone ||
+          !requestData.requesterLocation ||
+          !requestData.petName || // <--- Now explicitly required from frontend
+          !requestData.petImage // <--- Now explicitly required from frontend
+        ) {
+          // If any required field is missing, send a 400 Bad Request response
+          return res.status(400).send({
+            message:
+              "Missing required fields for adoption request (petId, requesterName, requesterEmail, requesterPhone, requesterLocation, petName, petImage).",
+          });
+        }
+
+        try {
+          // 1. Fetch pet details to ensure the pet exists and is available
+          // findDocumentById handles conversion of requestData.petId (string) to ObjectId if needed
+          const pet = await findDocumentById(petsCollection, requestData.petId);
+
+          // If the pet is not found in the database, return a 404 error
+          if (!pet) {
+            return res.status(404).send({ message: "Pet not found." });
+          }
+
+          // If the pet has already been marked as adopted, prevent new requests
+          if (pet.adopted) {
+            return res
+              .status(400)
+              .send({ message: "This pet has already been adopted." });
+          }
+
+          // Prevent a user from submitting an adoption request for their own pet
+          // Ensure `pet.createdByUserId` exists before comparison to avoid errors
+          if (pet.createdByUserId && pet.createdByUserId === requesterId) {
+            return res
+              .status(400)
+              .send({ message: "You cannot request to adopt your own pet." });
+          }
+
+          // 2. Check for existing pending or accepted adoption requests from this user for this pet
+          const existingRequest = await adoptionRequestsCollection.findOne({
+            petId: pet._id, // Use the actual BSON ObjectId from the fetched pet document
+            requesterId: requesterId, // Match by the authenticated user's UID
+            status: { $in: ["pending", "accepted"] }, // Check for requests that are pending or already accepted
+          });
+
+          // If an existing request is found, prevent duplicate submissions
+          if (existingRequest) {
+            return res.status(400).send({
+              message:
+                "You have already submitted an adoption request for this pet.",
+            });
+          }
+
+          // 3. Construct the adoption request object for insertion
+          const requestToInsert = {
+            petId: pet._id, // Store the BSON ObjectId of the pet
+            petName: requestData.petName, // <--- Received from frontend
+            petImage: requestData.petImage, // <--- Received from frontend
+            ownerId: pet.createdByUserId, // Store the ID of the pet's owner (Firebase UID string)
+            requesterId: requesterId, // The ID of the user making the request (Firebase UID string)
+            requesterName: requestData.requesterName,
+            requesterEmail: requestData.requesterEmail,
+            requesterPhone: requestData.requesterPhone,
+            requesterLocation: requestData.requesterLocation,
+            requesterMessage: requestData.requesterMessage || "",
+            requestDate: new Date(),
+            status: "pending", // Initial status of the adoption request
+          };
+
+          // 4. Insert the new adoption request into the database
+          const result = await adoptionRequestsCollection.insertOne(
+            requestToInsert
+          );
+
+          // 5. Send a success response
+          res.status(201).send({
+            success: true,
+            message: "Adoption request submitted successfully!",
+            insertedId: result.insertedId,
+          });
+        } catch (error) {
+          console.error("Error submitting adoption request:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to submit adoption request due to an internal server error." });
+        }
+      }
+    );
+
+    app.patch(
+      "/adoption-requests/:id/status", // id is MongoDB _id for the request
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        const requestId = req.params.id;
+        const { status } = req.body;
+
+        if (!["accepted", "rejected", "pending"].includes(status)) { // Added 'pending' as a valid status
+          return res.status(400).send({
+            message: "Invalid status. Must be 'pending', 'accepted' or 'rejected'.",
+          });
+        }
+
+        try {
+          const request = await findDocumentById(
+            adoptionRequestsCollection,
+            requestId
+          );
+          if (!request) {
+            return res
+              .status(404)
+              .send({ message: "Adoption request not found." });
+          }
+
+          // Allow status change from 'pending' to 'accepted' or 'rejected'
+          // Also allow changing from 'accepted'/'rejected' back to 'pending' if needed,
+          // but typically a request moves forward.
+          // If you want to restrict changes from 'accepted'/'rejected', add:
+          // if (request.status !== "pending" && status === "pending") {
+          //   return res.status(400).send({ message: `Cannot change status from '${request.status}' back to 'pending'.` });
+          // }
+
+          const pet = await findDocumentById(petsCollection, request.petId);
+
+          // Authorization check
+          // User must be admin, volunteer, or the pet's owner
+          const isPetOwner = pet && pet.createdByUserId === req.decoded.uid;
+          const isAdmin = req.decoded.role === 'admin';
+          const isVolunteer = req.decoded.role === 'volunteer';
+
+          if (!isPetOwner && !isAdmin && !isVolunteer) {
+            return res.status(403).send({
+              message: "Forbidden: You do not have permission to update this request.",
+            });
+          }
+
+
+          const updateResult = await adoptionRequestsCollection.updateOne(
+            { _id: request._id }, // Use the found _id (ObjectId or string)
+            { $set: { status: status } }
+          );
+
+          if (updateResult.matchedCount === 0) {
+            return res.status(404).send({
+              message: "Request not found or status already updated.",
+            });
+          }
+
+          // If status is 'approved', mark pet as adopted
+          if (status === "approved") { // Note: Your frontend sends 'approved', backend expects 'accepted' or 'rejected'
+                                      // I'm assuming 'approved' should map to 'accepted' for pet status
+            if (pet) {
+              const petUpdateResult = await petsCollection.updateOne(
+                { _id: pet._id }, // Use the found _id (ObjectId or string)
+                { $set: { adopted: true } }
+              );
+              if (petUpdateResult.matchedCount === 0) {
+                console.warn(
+                  `Pet ${pet._id} not found when trying to mark as adopted after request acceptance.`
+                );
+              }
+            } else {
+              console.warn(
+                `Pet not found for adoption request ${requestId}, cannot mark as adopted.`
+              );
+            }
+          } else if (status === "rejected" || status === "pending") {
+              // If status is rejected or set back to pending, ensure pet is NOT marked adopted
+              if (pet && pet.adopted) {
+                  const petUpdateResult = await petsCollection.updateOne(
+                      { _id: pet._id },
+                      { $set: { adopted: false } }
+                  );
+                  if (petUpdateResult.matchedCount === 0) {
+                      console.warn(`Pet ${pet._id} not found when trying to unmark as adopted.`);
+                  }
+              }
+          }
+
+
+          res.send({
+            success: true,
+            message: `Adoption request status updated to '${status}'.`,
+          });
+        } catch (error) {
+          console.error("Error updating adoption request status:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to update adoption request status." });
+        }
+      }
+    );
+
+   app.get('/adopted-pets', verifyFBToken, attachUserRole, async (req, res) => {
+  try {
+    const userRole = req.decoded.role;
+    const authUserId = req.decoded.uid;
+
+    const filter = { adopted: true };
+
+    // If not admin, only return pets created by the authenticated user that are adopted
+    if (userRole !== 'admin') {
+      filter.createdByUserId = authUserId;
+    }
+
+    const adoptedPets = await petsCollection.find(filter).toArray();
+    res.send(adoptedPets);
+  } catch (error) {
+    console.error("Error fetching adopted pets:", error);
+    res.status(500).send({ message: "Failed to retrieve adopted pets." });
+  }
+});
+
+
+    app.get(
+      "/volunteer-tasks/:volunteerId", // volunteerId is Firebase UID (string)
       verifyFBToken,
       attachUserRole,
       verifyVolunteer,
       async (req, res) => {
-        const volunteerId = req.params.volunteerId;
-
-        if (!ObjectId.isValid(volunteerId)) {
-          return res.status(400).send({ message: "Invalid volunteer ID" });
-        }
+        const volunteerId = req.params.volunteerId; // Firebase UID (string)
 
         try {
-          // Verify the user is a volunteer
+          // Verify the user is a volunteer (query by UID)
           const volunteer = await usersCollection.findOne({
-            _id: new ObjectId(volunteerId),
+            uid: volunteerId, // Query by Firebase UID (string)
             role: "volunteer",
           });
 
@@ -1831,18 +1871,21 @@ app.get(
           const tasks = await tasksCollection
             .aggregate([
               {
-                $match: { assignedTo: new ObjectId(volunteerId) },
+                $match: { assignedTo: volunteerId }, // Match by Firebase UID (string)
               },
               {
                 $lookup: {
                   from: "users",
-                  localField: "assignedBy",
-                  foreignField: "_id",
-                  as: "assignedBy",
+                  localField: "assignedBy", // This is Firebase UID (string)
+                  foreignField: "uid", // Link to 'uid' field in users collection
+                  as: "assignedByUser",
                 },
               },
               {
-                $unwind: "$assignedBy",
+                $unwind: {
+                  path: "$assignedByUser",
+                  preserveNullAndEmptyArrays: true,
+                }, // Preserve tasks even if user not found
               },
               {
                 $sort: { createdAt: -1 },
@@ -1857,6 +1900,43 @@ app.get(
         }
       }
     );
+    app.get("/admin/adopted-pets", verifyFBToken, attachUserRole, verifyAdmin, async (req, res) => {
+  try {
+    const approvedAdoptions = await adoptionRequestsCollection.find({ status: "approved" }).toArray();
+    res.send(approvedAdoptions);
+  } catch (error) {
+    console.error("Error fetching all approved adoptions:", error);
+    res.status(500).send({ message: "Failed to fetch approved adoptions." });
+  }
+});
+    app.get(
+  "/user/adoption-requests", // The endpoint URL
+  verifyFBToken,             // Middleware to verify Firebase ID token and attach decoded token to req.decoded
+  attachUserRole,            // Middleware to fetch user's role from DB and attach to req.decoded
+  async (req, res) => {
+    // Get the requester's user ID directly from the authenticated Firebase token
+    // This is the secure way to identify the user making the request.
+    const requesterIdFromToken = req.decoded.uid;
+
+    try {
+      // Fetch adoption requests from the 'adoptionRequestsCollection'
+      // It filters requests where the 'requesterId' field matches the authenticated user's UID.
+      const userRequests = await adoptionRequestsCollection.find({ requesterId: requesterIdFromToken }).toArray();
+
+      // Send the fetched requests as a 200 OK response
+      res.status(200).send(userRequests);
+    } catch (error) {
+      // Log any errors that occur during the database operation
+      console.error("Error fetching user's adoption requests:", error);
+      // Send a 500 Internal Server Error response if something goes wrong
+      res.status(500).send({ message: "Failed to fetch user's adoption requests." });
+    }
+  }
+);
+
+    
+
+
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close(); // Keep commented out for persistent connection in development
