@@ -1,29 +1,22 @@
-// index.js (or server.js)
-
-// Import necessary modules
-require("dotenv").config(); // Load environment variables from .env file
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const admin = require("firebase-admin"); // Firebase Admin SDK for authentication
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb"); // MongoDB driver
+const admin = require("firebase-admin");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
-// Initialize Express app
 const app = express();
-const port = process.env.PORT || 5000; // Use environment variable for port or default to 5000
+const port = process.env.PORT || 5000;
 
-// Middleware
-app.use(cors()); // Enable Cross-Origin Resource Sharing for all routes (adjust for production)
-app.use(express.json()); // Enable parsing of JSON request bodies
+app.use(cors());
+app.use(express.json());
 
-// --- Firebase Admin SDK Initialization ---
-// This block initializes Firebase Admin SDK using a service account key.
-// The key should be provided securely via an environment variable (base64 encoded JSON string).
 try {
   if (!process.env.FB_SERVICE_KEY) {
     throw new Error("FB_SERVICE_KEY environment variable is not set.");
   }
-  // Decode the base64 encoded service account key
-  const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString("utf8");
+  const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+    "utf8"
+  );
   const serviceAccount = JSON.parse(decodedKey);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -34,13 +27,11 @@ try {
     "Failed to initialize Firebase Admin SDK. Check FB_SERVICE_KEY in .env:",
     error.message
   );
-  process.exit(1); // Exit if Firebase initialization fails, as auth won't work
+  process.exit(1);
 }
 
-// MongoDB Connection URI from environment variables
 const uri = process.env.URI;
 
-// Global variables for MongoDB collections, initialized inside run()
 let db;
 let usersCollection;
 let petsCollection;
@@ -50,9 +41,8 @@ let wantedPetsCollection;
 let adoptionRequestsCollection;
 let tasksCollection;
 
-// Stripe initialization (for payments)
 const stripe = require("stripe")(
-  process.env.STRIPE_SECRET_KEY || "sk_test_YOUR_STRIPE_SECRET_KEY_FALLBACK" // Fallback for development
+  process.env.STRIPE_SECRET_KEY || "sk_test_YOUR_STRIPE_SECRET_KEY_FALLBACK"
 );
 
 // Helper function to find a document by _id, handling both ObjectId and string IDs
@@ -65,7 +55,9 @@ async function findDocumentById(collection, id) {
       document = await collection.findOne({ _id: new ObjectId(id) });
     } catch (error) {
       // Log a warning but don't fail, as we'll try string next
-      console.warn(`Warning: Failed to find with ObjectId for ID '${id}' in collection '${collection.collectionName}'. Error: ${error.message}`);
+      console.warn(
+        `Warning: Failed to find with ObjectId for ID '${id}' in collection '${collection.collectionName}'. Error: ${error.message}`
+      );
     }
   }
 
@@ -74,16 +66,16 @@ async function findDocumentById(collection, id) {
     try {
       document = await collection.findOne({ _id: id });
     } catch (error) {
-      console.error(`Error finding document with ID '${id}' as string in collection '${collection.collectionName}'. Error: ${error.message}`);
+      console.error(
+        `Error finding document with ID '${id}' as string in collection '${collection.collectionName}'. Error: ${error.message}`
+      );
     }
   }
 
   return document;
 }
 
-// Main function to connect to MongoDB and define routes
 async function run() {
-  // Ensure MongoDB URI is defined
   if (!uri) {
     console.error("Error: MONGODB_URI is not defined in your .env file.");
     console.error(
@@ -101,11 +93,10 @@ async function run() {
       },
     });
 
-    await client.connect(); // Connect to MongoDB
+    await client.connect();
     console.log("Connected to MongoDB successfully!");
 
-    // Initialize MongoDB collections
-    db = client.db("adopty"); // Replace "adopty" with your actual database name
+    db = client.db("adopty");
     usersCollection = db.collection("users");
     petsCollection = db.collection("pets");
     donationCamCollection = db.collection("donation-cam");
@@ -114,7 +105,6 @@ async function run() {
     adoptionRequestsCollection = db.collection("adoptionRequests");
     tasksCollection = db.collection("tasks");
 
-    // Log collection counts for debugging/monitoring
     const userCount = await usersCollection.countDocuments();
     const petCount = await petsCollection.countDocuments();
     const campaignCount = await donationCamCollection.countDocuments();
@@ -129,9 +119,6 @@ async function run() {
     console.log(`Wanted Pet Requests in DB: ${wantedPetCount}`);
     console.log(`Tasks in DB: ${taskCount}`);
 
-    // --- Custom Middleware Functions ---
-
-    // Middleware to verify Firebase ID token from the Authorization header
     const verifyFBToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -143,7 +130,7 @@ async function run() {
 
       try {
         const decodedToken = await admin.auth().verifyIdToken(token);
-        req.decoded = decodedToken; // Attach decoded token to request object (contains uid, email, etc.)
+        req.decoded = decodedToken;
         next();
       } catch (error) {
         console.error("Firebase token verification error:", error);
@@ -153,42 +140,34 @@ async function run() {
       }
     };
 
-    // Middleware to attach user role to the request object
     const attachUserRole = async (req, res, next) => {
-      if (!req.decoded || !req.decoded.uid) { // Prioritize UID from decoded token
+      if (!req.decoded || !req.decoded.email || !req.decoded.uid) {
         return res
           .status(401)
-          .send({ message: "Unauthorized: User UID not found in token." });
+          .send({
+            message: "Unauthorized: User email or UID not found in token.",
+          });
       }
       try {
-        // First, try to find user by Firebase UID
-        let user = await usersCollection.findOne({ uid: req.decoded.uid });
-
+        // Find user by email (as per original route structure)
+        const user = await usersCollection.findOne({
+          email: req.decoded.email,
+        });
         if (user) {
-          req.decoded.role = user.role; // Attach role from DB
+          req.decoded.role = user.role;
         } else {
-          // If user not found by UID, try by email (for legacy or initial sync)
-          user = await usersCollection.findOne({ email: req.decoded.email });
-          if (user) {
-            // If found by email, update their document to include UID for future consistency
-            await usersCollection.updateOne(
-              { _id: user._id },
-              { $set: { uid: req.decoded.uid, last_log_in: new Date().toISOString() } }
-            );
-            req.decoded.role = user.role;
-          } else {
-            // If user not found in DB at all (new user), create a basic entry
-            req.decoded.role = "user"; // Default role
-            await usersCollection.insertOne({
-              email: req.decoded.email,
-              uid: req.decoded.uid, // Store Firebase UID
-              displayName: req.decoded.name || req.decoded.email,
-              photoURL: req.decoded.picture || null,
-              role: 'user', // Default role
-              createdAt: new Date().toISOString(),
-              last_log_in: new Date().toISOString()
-            });
-          }
+          req.decoded.role = "user";
+          // If user not found in DB but authenticated via Firebase, create a basic entry
+          // This ensures a role is always available for authenticated users
+          await usersCollection.insertOne({
+            email: req.decoded.email,
+            uid: req.decoded.uid, // Store Firebase UID
+            displayName: req.decoded.name || req.decoded.email,
+            photoURL: req.decoded.picture || null,
+            role: "user",
+            createdAt: new Date().toISOString(),
+            last_log_in: new Date().toISOString(),
+          });
         }
         next();
       } catch (error) {
@@ -199,7 +178,6 @@ async function run() {
       }
     };
 
-    // Middleware to verify if the user is an admin
     const verifyAdmin = (req, res, next) => {
       if (!req.decoded || req.decoded.role !== "admin") {
         return res
@@ -209,7 +187,6 @@ async function run() {
       next();
     };
 
-    // Middleware to verify if the user is a volunteer or admin
     const verifyVolunteer = (req, res, next) => {
       if (
         !req.decoded ||
@@ -222,14 +199,10 @@ async function run() {
       next();
     };
 
-    // --- API Routes ---
-
-    // Health check route
     app.get("/", (req, res) => {
       res.send("Adopty Backend is running!");
     });
 
-    // User management routes
     app.post("/users", async (req, res) => {
       const user = req.body;
       const email = user.email;
@@ -240,7 +213,7 @@ async function run() {
       }
 
       try {
-        const userExists = await usersCollection.findOne({ uid }); // Find by UID for consistency
+        const userExists = await usersCollection.findOne({ email }); // Find by email
 
         if (userExists) {
           const updateDoc = {
@@ -248,10 +221,10 @@ async function run() {
               last_log_in: user.last_log_in || new Date().toISOString(),
               displayName: user.displayName || userExists.displayName,
               photoURL: user.photoURL || userExists.photoURL,
-              email: email, // Ensure email is updated/added if missing
+              uid: uid, // Ensure UID is updated/added if missing
             },
           };
-          await usersCollection.updateOne({ uid }, updateDoc); // Update by UID
+          await usersCollection.updateOne({ email }, updateDoc);
           return res.status(200).send({
             message: "User already exists. Last login updated.",
             inserted: false,
@@ -262,7 +235,7 @@ async function run() {
         const newUser = {
           ...user,
           uid: uid, // Store Firebase UID
-          role: user.role || "user", // Default role
+          role: user.role || "user",
           createdAt: new Date().toISOString(),
           last_log_in: new Date().toISOString(),
         };
@@ -291,14 +264,13 @@ async function run() {
     );
 
     app.get(
-      "/users/:uid", // Changed route parameter to :uid for consistency
+      "/users/:email", // Route parameter remains :email
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
-        const requestedUid = req.params.uid; // Now expecting UID
-        // Allow user to view their own data or admin to view any user data
+        const requestedEmail = req.params.email;
         if (
-          req.decoded.uid !== requestedUid && // Compare UIDs
+          req.decoded.email !== requestedEmail &&
           req.decoded.role !== "admin"
         ) {
           return res.status(403).send({
@@ -307,7 +279,7 @@ async function run() {
           });
         }
         try {
-          const user = await usersCollection.findOne({ uid: requestedUid }); // Query by UID
+          const user = await usersCollection.findOne({ email: requestedEmail }); // Query by email
           if (user) {
             res.send(user);
           } else {
@@ -1623,61 +1595,62 @@ async function run() {
     );
     app.post(
       "/adoption-requests",
-      verifyFBToken, // Authenticates the user and attaches decoded token to req.decoded
-      attachUserRole, // Attaches the user's role (e.g., 'user', 'owner')
+      verifyFBToken, // Middleware to verify Firebase token and attach decoded data (e.g., uid) to req.decoded
+      attachUserRole, // Middleware to attach user role if needed
       async (req, res) => {
-        // Extract request data from the request body sent by the client
+        // Extract request data from the request body
         const requestData = req.body;
-        // Get the requester's user ID from the decoded Firebase token (set by verifyFBToken)
-        const requesterId = req.decoded.uid; // <--- This is where the frontend's user.uid is received
+        // Get the requester's user ID from the decoded Firebase token
+        const requesterId = req.decoded.uid;
 
-        // Basic server-side validation for required fields
+        // Basic validation: Check for required fields from the frontend
         if (
           !requestData.petId ||
           !requestData.requesterName ||
           !requestData.requesterEmail ||
           !requestData.requesterPhone ||
-          !requestData.requesterLocation ||
-          !requestData.petName || // <--- Now explicitly required from frontend
-          !requestData.petImage // <--- Now explicitly required from frontend
+          !requestData.requesterLocation
         ) {
-          // If any required field is missing, send a 400 Bad Request response
           return res.status(400).send({
             message:
-              "Missing required fields for adoption request (petId, requesterName, requesterEmail, requesterPhone, requesterLocation, petName, petImage).",
+              "Missing required fields for adoption request (petId, requesterName, requesterEmail, requesterPhone, requesterLocation).",
           });
         }
 
         try {
-          // 1. Fetch pet details to ensure the pet exists and is available
-          // findDocumentById handles conversion of requestData.petId (string) to ObjectId if needed
+          // Fetch pet details using the provided petId.
+          // The findDocumentById helper should handle converting requestData.petId (string)
+          // to a proper MongoDB ObjectId for the query if _id is of ObjectId type.
           const pet = await findDocumentById(petsCollection, requestData.petId);
 
-          // If the pet is not found in the database, return a 404 error
+          // If the pet is not found, return a 404 error
           if (!pet) {
             return res.status(404).send({ message: "Pet not found." });
           }
 
-          // If the pet has already been marked as adopted, prevent new requests
+          // If the pet is already adopted, prevent further requests
           if (pet.adopted) {
             return res
               .status(400)
               .send({ message: "This pet has already been adopted." });
           }
 
-          // Prevent a user from submitting an adoption request for their own pet
-          // Ensure `pet.createdByUserId` exists before comparison to avoid errors
+          // Prevent a user from requesting to adopt their own pet
+          // Check if pet.createdByUserId exists to avoid errors if the field is missing
           if (pet.createdByUserId && pet.createdByUserId === requesterId) {
             return res
               .status(400)
               .send({ message: "You cannot request to adopt your own pet." });
           }
 
-          // 2. Check for existing pending or accepted adoption requests from this user for this pet
+          // Check if this user has already submitted an adoption request for this specific pet.
+          // We use pet._id (the actual BSON ObjectId from the fetched pet document)
+          // for consistency and correctness in the query.
           const existingRequest = await adoptionRequestsCollection.findOne({
-            petId: pet._id, // Use the actual BSON ObjectId from the fetched pet document
-            requesterId: requesterId, // Match by the authenticated user's UID
-            status: { $in: ["pending", "accepted"] }, // Check for requests that are pending or already accepted
+            petId: pet._id, // Use the BSON ObjectId of the pet
+            requesterId: requesterId,
+            // Check for existing pending or already accepted requests
+            status: { $in: ["pending", "accepted"] },
           });
 
           // If an existing request is found, prevent duplicate submissions
@@ -1688,53 +1661,56 @@ async function run() {
             });
           }
 
-          // 3. Construct the adoption request object for insertion
+          // Construct the adoption request object to be inserted into the database
           const requestToInsert = {
-            petId: pet._id, // Store the BSON ObjectId of the pet
-            petName: requestData.petName, // <--- Received from frontend
-            petImage: requestData.petImage, // <--- Received from frontend
-            ownerId: pet.createdByUserId, // Store the ID of the pet's owner (Firebase UID string)
-            requesterId: requesterId, // The ID of the user making the request (Firebase UID string)
+            petId: pet._id, // Use the BSON ObjectId of the pet for consistency
+            petName: pet.name, // Derive pet name from the fetched pet document
+            petImage: pet.image, // Derive pet image from the fetched pet document
+            ownerId: pet.createdByUserId, // Derive owner ID from the fetched pet document
+            requesterId: requesterId, // The ID of the user submitting the request
             requesterName: requestData.requesterName,
             requesterEmail: requestData.requesterEmail,
             requesterPhone: requestData.requesterPhone,
             requesterLocation: requestData.requesterLocation,
+            // Include requesterMessage if provided, it's an optional field
             requesterMessage: requestData.requesterMessage || "",
-            requestDate: new Date(),
-            status: "pending", // Initial status of the adoption request
+            requestDate: new Date(), // Timestamp of the request submission
+            status: "pending", // Default status for a new request
           };
 
-          // 4. Insert the new adoption request into the database
+          // Insert the new adoption request into the collection
           const result = await adoptionRequestsCollection.insertOne(
             requestToInsert
           );
 
-          // 5. Send a success response
+          // Send a success response with the inserted ID
           res.status(201).send({
             success: true,
             message: "Adoption request submitted successfully!",
             insertedId: result.insertedId,
           });
         } catch (error) {
+          // Log any errors that occur during the process
           console.error("Error submitting adoption request:", error);
+          // Send a 500 internal server error response
           res
             .status(500)
-            .send({ message: "Failed to submit adoption request due to an internal server error." });
+            .send({ message: "Failed to submit adoption request." });
         }
       }
     );
 
     app.patch(
-      "/adoption-requests/:id/status", // id is MongoDB _id for the request
+      "/adoption-requests/status/:id", // id is MongoDB _id for the request
       verifyFBToken,
       attachUserRole,
       async (req, res) => {
         const requestId = req.params.id;
         const { status } = req.body;
 
-        if (!["accepted", "rejected", "pending"].includes(status)) { // Added 'pending' as a valid status
+        if (!["accepted", "rejected"].includes(status)) {
           return res.status(400).send({
-            message: "Invalid status. Must be 'pending', 'accepted' or 'rejected'.",
+            message: "Invalid status. Must be 'accepted' or 'rejected'.",
           });
         }
 
@@ -1749,28 +1725,38 @@ async function run() {
               .send({ message: "Adoption request not found." });
           }
 
-          // Allow status change from 'pending' to 'accepted' or 'rejected'
-          // Also allow changing from 'accepted'/'rejected' back to 'pending' if needed,
-          // but typically a request moves forward.
-          // If you want to restrict changes from 'accepted'/'rejected', add:
-          // if (request.status !== "pending" && status === "pending") {
-          //   return res.status(400).send({ message: `Cannot change status from '${request.status}' back to 'pending'.` });
-          // }
-
-          const pet = await findDocumentById(petsCollection, request.petId);
-
-          // Authorization check
-          // User must be admin, volunteer, or the pet's owner
-          const isPetOwner = pet && pet.createdByUserId === req.decoded.uid;
-          const isAdmin = req.decoded.role === 'admin';
-          const isVolunteer = req.decoded.role === 'volunteer';
-
-          if (!isPetOwner && !isAdmin && !isVolunteer) {
-            return res.status(403).send({
-              message: "Forbidden: You do not have permission to update this request.",
+          if (request.status !== "pending") {
+            return res.status(400).send({
+              message: `Request is already ${request.status}. Cannot change.`,
             });
           }
 
+          const pet = await findDocumentById(petsCollection, request.petId); // request.petId can be ObjectId or string
+
+          if (!pet) {
+            // If associated pet not found, allow admin/volunteer to manage, otherwise deny
+            if (
+              req.decoded.role !== "admin" &&
+              req.decoded.role !== "volunteer"
+            ) {
+              return res.status(403).send({
+                message:
+                  "Forbidden: Associated pet not found and you are not an admin/volunteer.",
+              });
+            }
+          } else {
+            // If pet is found, check if current user is pet owner, admin, or volunteer
+            if (
+              pet.createdByUserId !== req.decoded.uid &&
+              req.decoded.role !== "admin" &&
+              req.decoded.role !== "volunteer" // Added volunteer role check
+            ) {
+              return res.status(403).send({
+                message:
+                  "Forbidden: You do not have permission to update this request.",
+              });
+            }
+          }
 
           const updateResult = await adoptionRequestsCollection.updateOne(
             { _id: request._id }, // Use the found _id (ObjectId or string)
@@ -1783,9 +1769,7 @@ async function run() {
             });
           }
 
-          // If status is 'approved', mark pet as adopted
-          if (status === "approved") { // Note: Your frontend sends 'approved', backend expects 'accepted' or 'rejected'
-                                      // I'm assuming 'approved' should map to 'accepted' for pet status
+          if (status === "accepted") {
             if (pet) {
               const petUpdateResult = await petsCollection.updateOne(
                 { _id: pet._id }, // Use the found _id (ObjectId or string)
@@ -1801,19 +1785,7 @@ async function run() {
                 `Pet not found for adoption request ${requestId}, cannot mark as adopted.`
               );
             }
-          } else if (status === "rejected" || status === "pending") {
-              // If status is rejected or set back to pending, ensure pet is NOT marked adopted
-              if (pet && pet.adopted) {
-                  const petUpdateResult = await petsCollection.updateOne(
-                      { _id: pet._id },
-                      { $set: { adopted: false } }
-                  );
-                  if (petUpdateResult.matchedCount === 0) {
-                      console.warn(`Pet ${pet._id} not found when trying to unmark as adopted.`);
-                  }
-              }
           }
-
 
           res.send({
             success: true,
@@ -1835,7 +1807,7 @@ async function run() {
 
     const filter = { adopted: true };
 
-    // If not admin, only return pets created by the authenticated user that are adopted
+    // If not admin, only return their adopted pets (they created and marked adopted)
     if (userRole !== 'admin') {
       filter.createdByUserId = authUserId;
     }
@@ -1909,7 +1881,12 @@ async function run() {
     res.status(500).send({ message: "Failed to fetch approved adoptions." });
   }
 });
-    app.get(
+    
+// This route is located within your `run()` function in index.js
+
+// NEW ROUTE: Get adoption requests for a specific user (User View)
+// This route will be used by the frontend to fetch a user's requests (pending, approved, rejected)
+app.get(
   "/user/adoption-requests", // The endpoint URL
   verifyFBToken,             // Middleware to verify Firebase ID token and attach decoded token to req.decoded
   attachUserRole,            // Middleware to fetch user's role from DB and attach to req.decoded
