@@ -10,6 +10,10 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+app.get("/", (req, res) => {
+      res.send("Adopty Backend is running!");
+    });
+
 try {
   if (!process.env.FB_SERVICE_KEY) {
     throw new Error("FB_SERVICE_KEY environment variable is not set.");
@@ -142,11 +146,9 @@ async function run() {
 
     const attachUserRole = async (req, res, next) => {
       if (!req.decoded || !req.decoded.email || !req.decoded.uid) {
-        return res
-          .status(401)
-          .send({
-            message: "Unauthorized: User email or UID not found in token.",
-          });
+        return res.status(401).send({
+          message: "Unauthorized: User email or UID not found in token.",
+        });
       }
       try {
         // Find user by email (as per original route structure)
@@ -199,9 +201,7 @@ async function run() {
       next();
     };
 
-    app.get("/", (req, res) => {
-      res.send("Adopty Backend is running!");
-    });
+    
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -433,11 +433,9 @@ async function run() {
             _id: newPetData._id,
           });
           if (existingPet) {
-            return res
-              .status(409)
-              .send({
-                message: `A pet with ID '${newPetData._id}' already exists.`,
-              });
+            return res.status(409).send({
+              message: `A pet with ID '${newPetData._id}' already exists.`,
+            });
           }
 
           petToInsert._id = newPetData._id;
@@ -927,12 +925,10 @@ async function run() {
           }
 
           if (campaign.paused === paused) {
-            return res
-              .status(200)
-              .send({
-                success: false,
-                message: "Campaign status is already as requested.",
-              });
+            return res.status(200).send({
+              success: false,
+              message: "Campaign status is already as requested.",
+            });
           }
 
           const result = await donationCamCollection.updateOne(
@@ -941,11 +937,9 @@ async function run() {
           );
 
           if (result.matchedCount === 0) {
-            return res
-              .status(404)
-              .send({
-                message: "Campaign not found or status already updated.",
-              });
+            return res.status(404).send({
+              message: "Campaign not found or status already updated.",
+            });
           }
           res.send({
             success: true,
@@ -1800,26 +1794,30 @@ async function run() {
       }
     );
 
-   app.get('/adopted-pets', verifyFBToken, attachUserRole, async (req, res) => {
-  try {
-    const userRole = req.decoded.role;
-    const authUserId = req.decoded.uid;
+    app.get(
+      "/adopted-pets",
+      verifyFBToken,
+      attachUserRole,
+      async (req, res) => {
+        try {
+          const userRole = req.decoded.role;
+          const authUserId = req.decoded.uid;
 
-    const filter = { adopted: true };
+          const filter = { adopted: true };
 
-    // If not admin, only return their adopted pets (they created and marked adopted)
-    if (userRole !== 'admin') {
-      filter.createdByUserId = authUserId;
-    }
+          // If not admin, only return their adopted pets (they created and marked adopted)
+          if (userRole !== "admin") {
+            filter.createdByUserId = authUserId;
+          }
 
-    const adoptedPets = await petsCollection.find(filter).toArray();
-    res.send(adoptedPets);
-  } catch (error) {
-    console.error("Error fetching adopted pets:", error);
-    res.status(500).send({ message: "Failed to retrieve adopted pets." });
-  }
-});
-
+          const adoptedPets = await petsCollection.find(filter).toArray();
+          res.send(adoptedPets);
+        } catch (error) {
+          console.error("Error fetching adopted pets:", error);
+          res.status(500).send({ message: "Failed to retrieve adopted pets." });
+        }
+      }
+    );
 
     app.get(
       "/volunteer-tasks/:volunteerId", // volunteerId is Firebase UID (string)
@@ -1864,7 +1862,6 @@ async function run() {
               },
             ])
             .toArray();
-            
 
           res.send(tasks);
         } catch (error) {
@@ -1873,48 +1870,58 @@ async function run() {
         }
       }
     );
-    app.get("/admin/adopted-pets", verifyFBToken, attachUserRole, verifyAdmin, async (req, res) => {
-  try {
-    const approvedAdoptions = await adoptionRequestsCollection.find({ status: "approved" }).toArray();
-    res.send(approvedAdoptions);
-  } catch (error) {
-    console.error("Error fetching all approved adoptions:", error);
-    res.status(500).send({ message: "Failed to fetch approved adoptions." });
-  }
-});
-    
-// This route is located within your `run()` function in index.js
+    app.get(
+      "/admin/adopted-pets",
+      verifyFBToken,
+      attachUserRole,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const approvedAdoptions = await adoptionRequestsCollection
+            .find({ status: "approved" })
+            .toArray();
+          res.send(approvedAdoptions);
+        } catch (error) {
+          console.error("Error fetching all approved adoptions:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to fetch approved adoptions." });
+        }
+      }
+    );
 
-// NEW ROUTE: Get adoption requests for a specific user (User View)
-// This route will be used by the frontend to fetch a user's requests (pending, approved, rejected)
-app.get(
-  "/user/adoption-requests", // The endpoint URL
-  verifyFBToken,             // Middleware to verify Firebase ID token and attach decoded token to req.decoded
-  attachUserRole,            // Middleware to fetch user's role from DB and attach to req.decoded
-  async (req, res) => {
-    // Get the requester's user ID directly from the authenticated Firebase token
-    // This is the secure way to identify the user making the request.
-    const requesterIdFromToken = req.decoded.uid;
+    // This route is located within your `run()` function in index.js
 
-    try {
-      // Fetch adoption requests from the 'adoptionRequestsCollection'
-      // It filters requests where the 'requesterId' field matches the authenticated user's UID.
-      const userRequests = await adoptionRequestsCollection.find({ requesterId: requesterIdFromToken }).toArray();
+    // NEW ROUTE: Get adoption requests for a specific user (User View)
+    // This route will be used by the frontend to fetch a user's requests (pending, approved, rejected)
+    app.get(
+      "/user/adoption-requests", // The endpoint URL
+      verifyFBToken, // Middleware to verify Firebase ID token and attach decoded token to req.decoded
+      attachUserRole, // Middleware to fetch user's role from DB and attach to req.decoded
+      async (req, res) => {
+        // Get the requester's user ID directly from the authenticated Firebase token
+        // This is the secure way to identify the user making the request.
+        const requesterIdFromToken = req.decoded.uid;
 
-      // Send the fetched requests as a 200 OK response
-      res.status(200).send(userRequests);
-    } catch (error) {
-      // Log any errors that occur during the database operation
-      console.error("Error fetching user's adoption requests:", error);
-      // Send a 500 Internal Server Error response if something goes wrong
-      res.status(500).send({ message: "Failed to fetch user's adoption requests." });
-    }
-  }
-);
+        try {
+          // Fetch adoption requests from the 'adoptionRequestsCollection'
+          // It filters requests where the 'requesterId' field matches the authenticated user's UID.
+          const userRequests = await adoptionRequestsCollection
+            .find({ requesterId: requesterIdFromToken })
+            .toArray();
 
-    
-
-
+          // Send the fetched requests as a 200 OK response
+          res.status(200).send(userRequests);
+        } catch (error) {
+          // Log any errors that occur during the database operation
+          console.error("Error fetching user's adoption requests:", error);
+          // Send a 500 Internal Server Error response if something goes wrong
+          res
+            .status(500)
+            .send({ message: "Failed to fetch user's adoption requests." });
+        }
+      }
+    );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close(); // Keep commented out for persistent connection in development
