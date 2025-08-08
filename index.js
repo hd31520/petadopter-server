@@ -10,10 +10,6 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
-      res.send("Adopty Backend is running!");
-    });
-
 try {
   if (!process.env.FB_SERVICE_KEY) {
     throw new Error("FB_SERVICE_KEY environment variable is not set.");
@@ -80,14 +76,6 @@ async function findDocumentById(collection, id) {
 }
 
 async function run() {
-  if (!uri) {
-    console.error("Error: MONGODB_URI is not defined in your .env file.");
-    console.error(
-      "Please make sure your .env file is in the root of your project and contains MONGODB_URI='YOUR_CONNECTION_STRING'"
-    );
-    process.exit(1);
-  }
-
   try {
     const client = new MongoClient(uri, {
       serverApi: {
@@ -97,7 +85,7 @@ async function run() {
       },
     });
 
-    await client.connect();
+    // await client.connect();
     console.log("Connected to MongoDB successfully!");
 
     db = client.db("adopty");
@@ -200,8 +188,6 @@ async function run() {
       }
       next();
     };
-
-    
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -1928,6 +1914,10 @@ async function run() {
   }
 }
 run().catch(console.dir);
+
+app.get("/", (req, res) => {
+  res.send("Adopty Backend is running!");
+});
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
