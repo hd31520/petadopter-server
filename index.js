@@ -103,6 +103,7 @@ async function run() {
     const donationCount = await donationsCollection.countDocuments();
     const wantedPetCount = await wantedPetsCollection.countDocuments();
     const taskCount = await tasksCollection.countDocuments();
+    // console.log(userCount, petCount, campaignCount, donationCount , wantedPetCount , taskCount)
 
     console.log(`Users in DB: ${userCount}`);
     console.log(`Pets in DB: ${petCount}`);
@@ -1908,6 +1909,19 @@ async function run() {
         }
       }
     );
+    app.get("/admin-home",  async (req, res) => {
+      res.send({
+        userCount,
+        petCount,
+        campaignCount,
+        donationCount,
+        wantedPetCount,
+        taskCount
+        }
+      );
+    });
+
+    
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close(); // Keep commented out for persistent connection in development
