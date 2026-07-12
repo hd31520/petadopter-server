@@ -97,20 +97,24 @@ async function run() {
     adoptionRequestsCollection = db.collection("adoptionRequests");
     tasksCollection = db.collection("tasks");
 
-    const userCount = await usersCollection.countDocuments();
-    const petCount = await petsCollection.countDocuments();
-    const campaignCount = await donationCamCollection.countDocuments();
-    const donationCount = await donationsCollection.countDocuments();
-    const wantedPetCount = await wantedPetsCollection.countDocuments();
-    const taskCount = await tasksCollection.countDocuments();
-    // console.log(userCount, petCount, campaignCount, donationCount , wantedPetCount , taskCount)
+    try {
+      const userCount = await usersCollection.countDocuments();
+      const petCount = await petsCollection.countDocuments();
+      const campaignCount = await donationCamCollection.countDocuments();
+      const donationCount = await donationsCollection.countDocuments();
+      const wantedPetCount = await wantedPetsCollection.countDocuments();
+      const taskCount = await tasksCollection.countDocuments();
+      // console.log(userCount, petCount, campaignCount, donationCount , wantedPetCount , taskCount)
 
-    console.log(`Users in DB: ${userCount}`);
-    console.log(`Pets in DB: ${petCount}`);
-    console.log(`Donation Campaigns in DB: ${campaignCount}`);
-    console.log(`Donations in DB: ${donationCount}`);
-    console.log(`Wanted Pet Requests in DB: ${wantedPetCount}`);
-    console.log(`Tasks in DB: ${taskCount}`);
+      console.log(`Users in DB: ${userCount}`);
+      console.log(`Pets in DB: ${petCount}`);
+      console.log(`Donation Campaigns in DB: ${campaignCount}`);
+      console.log(`Donations in DB: ${donationCount}`);
+      console.log(`Wanted Pet Requests in DB: ${wantedPetCount}`);
+      console.log(`Tasks in DB: ${taskCount}`);
+    } catch (dbError) {
+      console.error("Database connection validation failed on startup:", dbError.message);
+    }
 
     const verifyFBToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
