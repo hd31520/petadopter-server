@@ -1927,7 +1927,24 @@ async function run() {
     // await client.close(); // Keep commented out for persistent connection in development
   }
 }
-run().catch(console.dir);
+
+let runError = null;
+run().catch(err => {
+  runError = err;
+  console.error("Error during run():", err);
+});
+
+app.get("/test-status", (req, res) => {
+  res.send({
+    dbConnected: !!db,
+    runError: runError ? { message: runError.message, stack: runError.stack } : null,
+    env: {
+      hasUri: !!process.env.URI,
+      hasFbKey: !!process.env.FB_SERVICE_KEY,
+      hasStripeKey: !!process.env.STRIPE_SECRET_KEY
+    }
+  });
+});
 
 app.get("/", (req, res) => {
   res.send("Adopty Backend is running!");
