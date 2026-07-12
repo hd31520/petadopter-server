@@ -359,7 +359,7 @@ async function run() {
         res.send(result);
       } catch (error) {
         console.error("Error fetching pets:", error);
-        res.status(500).send({ message: "Internal server error." });
+        res.status(500).send({ message: "Internal server error.", error: error.message });
       }
     });
 
