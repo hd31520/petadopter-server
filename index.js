@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ path: [".env.local", ".env"] });
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
@@ -75,7 +75,7 @@ async function findDocumentById(collection, id) {
   return document;
 }
 
-async function run() {
+function run() {
   try {
     const client = new MongoClient(uri, {
       serverApi: {
@@ -85,7 +85,7 @@ async function run() {
       },
     });
 
-    // await client.connect();
+    // client.connect();
     console.log("Connected to MongoDB successfully!");
 
     db = client.db("adopty");
@@ -97,24 +97,26 @@ async function run() {
     adoptionRequestsCollection = db.collection("adoptionRequests");
     tasksCollection = db.collection("tasks");
 
-    try {
-      const userCount = await usersCollection.countDocuments();
-      const petCount = await petsCollection.countDocuments();
-      const campaignCount = await donationCamCollection.countDocuments();
-      const donationCount = await donationsCollection.countDocuments();
-      const wantedPetCount = await wantedPetsCollection.countDocuments();
-      const taskCount = await tasksCollection.countDocuments();
-      // console.log(userCount, petCount, campaignCount, donationCount , wantedPetCount , taskCount)
+    (async () => {
+      try {
+        const userCount = await usersCollection.countDocuments();
+        const petCount = await petsCollection.countDocuments();
+        const campaignCount = await donationCamCollection.countDocuments();
+        const donationCount = await donationsCollection.countDocuments();
+        const wantedPetCount = await wantedPetsCollection.countDocuments();
+        const taskCount = await tasksCollection.countDocuments();
+        // console.log(userCount, petCount, campaignCount, donationCount , wantedPetCount , taskCount)
 
-      console.log(`Users in DB: ${userCount}`);
-      console.log(`Pets in DB: ${petCount}`);
-      console.log(`Donation Campaigns in DB: ${campaignCount}`);
-      console.log(`Donations in DB: ${donationCount}`);
-      console.log(`Wanted Pet Requests in DB: ${wantedPetCount}`);
-      console.log(`Tasks in DB: ${taskCount}`);
-    } catch (dbError) {
-      console.error("Database connection validation failed on startup:", dbError.message);
-    }
+        console.log(`Users in DB: ${userCount}`);
+        console.log(`Pets in DB: ${petCount}`);
+        console.log(`Donation Campaigns in DB: ${campaignCount}`);
+        console.log(`Donations in DB: ${donationCount}`);
+        console.log(`Wanted Pet Requests in DB: ${wantedPetCount}`);
+        console.log(`Tasks in DB: ${taskCount}`);
+      } catch (dbError) {
+        console.error("Database connection validation failed on startup:", dbError.message);
+      }
+    })();
 
     const verifyFBToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
@@ -673,7 +675,16 @@ async function run() {
 
     app.get("/donation-cam", async (req, res) => {
       try {
-        const result = await donationCamCollection.find().toArray();
+        let query = donationCamCollection.find();
+        
+        if (req.query.page && req.query.limit) {
+          const page = parseInt(req.query.page) || 1;
+          const limit = parseInt(req.query.limit) || 6;
+          const skip = (page - 1) * limit;
+          query = query.skip(skip).limit(limit);
+        }
+        
+        const result = await query.toArray();
         res.send(result);
       } catch (error) {
         console.error("Error fetching all donation campaigns:", error);
@@ -1913,30 +1924,42 @@ async function run() {
         }
       }
     );
-    app.get("/admin-home",  async (req, res) => {
-      res.send({
-        userCount,
-        petCount,
-        campaignCount,
-        donationCount,
-        wantedPetCount,
-        taskCount
-        }
-      );
+    app.get("/admin-home", async (req, res) => {
+      try {
+        const userCount = await usersCollection.countDocuments();
+        const petCount = await petsCollection.countDocuments();
+        const campaignCount = await donationCamCollection.countDocuments();
+        const donationCount = await donationsCollection.countDocuments();
+        const wantedPetCount = await wantedPetsCollection.countDocuments();
+        const taskCount = await tasksCollection.countDocuments();
+        res.send({
+          userCount,
+          petCount,
+          campaignCount,
+          donationCount,
+          wantedPetCount,
+          taskCount
+        });
+      } catch (error) {
+        console.error("Error fetching admin-home counts:", error);
+        res.status(500).send({ message: "Failed to fetch dashboard data." });
+      }
     });
 
-    
+
   } finally {
     // Ensures that the client will close when you finish/error
-    // await client.close(); // Keep commented out for persistent connection in development
+    // client.close(); // Keep commented out for persistent connection in development
   }
 }
 
 let runError = null;
-run().catch(err => {
+try {
+  run();
+} catch (err) {
   runError = err;
   console.error("Error during run():", err);
-});
+}
 
 app.get("/test-status", (req, res) => {
   res.send({
@@ -1957,3 +1980,5 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
+
+module.exports = app;
